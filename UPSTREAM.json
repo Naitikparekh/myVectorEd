@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/storytold/vectorcraft.git",
+  "commit": "9c61c0b66e39082b1c0c448cbf59fd323736ff9c",
+  "excluded": [
+    ".git",
+    ".github",
+    "AGENTS.md",
+    "README.md"
+  ],
+  "status": "Unmodified engine; myVectorEd implementation pending"
+}
