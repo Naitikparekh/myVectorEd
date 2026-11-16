@@ -1,0 +1,69 @@
+name: Bootstrap and compile myVectorEd
+on:
+  push:
+    branches: [dev/myvectored-bootstrap]
+    paths: [.github/workflows/bootstrap.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: myvectored-bootstrap
+  cancel-in-progress: false
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.source.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev/myvectored-bootstrap
+      - name: Import pinned source and apply title overlay
+        shell: bash
+        run: |
+          if [ ! -f Cargo.toml ]; then
+            python3 tools/bootstrap_source.py
+            python3 tools/customize.py
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .
+            git commit -m "Import pinned VectorCraft source and initial myVectorEd title"
+            git push origin HEAD:dev/myvectored-bootstrap
+          fi
+      - id: source
+        shell: bash
+        run: echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  windows:
+    needs: import
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.import.outputs.revision }}
+          persist-credentials: false
+      - name: Install declared Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+      - name: Check desktop and CLI
+        run: cargo check --locked -p vectorcraft -p vectorcraft-cli
+      - name: Compile development desktop
+        run: cargo build --locked -p vectorcraft
+      - name: Record development status
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path preview | Out-Null
+          Copy-Item target/debug/vectorcraft.exe preview/myVectorEd.exe
+          Copy-Item LICENSE-MIT,LICENSE-APACHE,NOTICE preview/
+          "Development preview only. EPS pair-save, settings isolation, custom updater and full rebranding are not implemented. Not tested interactively. Do not use the upstream updater." | Set-Content preview/READ-ME.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myVectorEd-windows-development
+          path: preview/
+          if-no-files-found: error
+          retention-days: 7
