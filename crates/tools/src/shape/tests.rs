@@ -1554,3 +1554,41 @@ fn backtick_copy_spacing_is_measured_on_screen() {
     assert!(!previewed_shapes(&t.pointer(&c, &quote_drag(21.5, 20.0, true))).0, "6 screen points");
     assert!(previewed_shapes(&t.pointer(&c, &quote_drag(22.0, 20.0, true))).0, "8 screen points");
 }
+
+/// While a rounded rectangle is dragged out, ← squares its corners and → rounds them as far as
+/// they go (half the shorter side of the rectangle being drawn); ↑/↓ go on from there, and the
+/// radius chosen stays the tool's radius
+/// ([Adobe community answer](https://community.adobe.com/t5/illustrator-discussions/help-i-can-t-use-my-up-and-down-buttons-to-adjust-the-corners-of-the-rounded-rectangle-tool/m-p/8662315)).
+#[test]
+fn rounded_rectangle_left_and_right_arrows_square_or_fully_round_the_corners() {
+    let (d, _) = doc_with_rect();
+    let s = Selection::default();
+    let p = paint();
+    let mut cx = cx(&d, &s, &p);
+    cx.smart_guides = false;
+    let radius = |a: Vec<Action>| match a.last() {
+        Some(Action::Preview(c, v)) if c == "shape.rectangle" => v["radius"].as_f64().unwrap(),
+        _ => panic!("{a:?}"),
+    };
+    let mut t = ShapeTool::new("roundedRectangle");
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, 10.0, 10.0));
+    assert_eq!(radius(t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, 110.0, 50.0))), 12.0);
+    assert_eq!(radius(t.key(&cx, ToolKey::Left, Mods::default())), 0.0);
+    assert_eq!(radius(t.key(&cx, ToolKey::Up, Mods::default())), 1.0, "↑ goes on from square corners");
+    // 100 × 40: the shorter side is 40.
+    assert_eq!(radius(t.key(&cx, ToolKey::Right, Mods::default())), 20.0);
+    assert_eq!(radius(t.key(&cx, ToolKey::Down, Mods::default())), 19.0, "↓ goes on from the roundest");
+    t.key(&cx, ToolKey::Right, Mods::default());
+    assert_eq!(t.pointer(&cx, &PointerEvent::new(PointerKind::Up, 110.0, 50.0)), vec![Action::Commit]);
+    assert_eq!(t.options()["cornerRadius"], json!(20.0), "the radius stays the tool's");
+    // From the centre with Alt the rectangle is twice as large, and so is its roundest radius.
+    let alt = Mods { alt: true, ..Mods::default() };
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, 200.0, 200.0).with_mods(alt));
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, 260.0, 230.0).with_mods(alt));
+    assert_eq!(radius(t.key(&cx, ToolKey::Right, alt)), 30.0);
+    // Other shape tools leave ← and → alone.
+    let mut t = ShapeTool::new("rectangle");
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, 10.0, 10.0));
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, 110.0, 50.0));
+    assert!(t.key(&cx, ToolKey::Right, Mods::default()).is_empty());
+}
