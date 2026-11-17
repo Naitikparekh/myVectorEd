@@ -66,7 +66,7 @@ impl PolygonalLassoTool {
         if vertices.len() < 3 {
             return vec![];
         }
-        vec![lasso_select(cx, &mut self.mesh, &vertices, self.add, self.sub)]
+        lasso_select(cx, &mut self.mesh, &vertices, self.add, self.sub)
     }
 }
 
