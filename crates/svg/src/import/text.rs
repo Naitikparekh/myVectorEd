@@ -72,33 +72,30 @@ fn generic_candidates(generic: &str) -> &'static [&'static str] {
     }
 }
 
-/// The family a CSS `font-family` list `value` sets type in: the first entry that `available`
-/// knows, as CSS picks it (CSS Fonts 4 §5.1), with a generic family resolved to an installed face
-/// of its kind, or to `default` for the sans-serif ones. With nothing in the list available, the
-/// first named (non-generic) family, kept so Find Font can replace it; `None` when the list names
-/// only generic families none of which resolve (the style keeps its family).
+/// The family a CSS `font-family` list `value` sets type in: the first named family that
+/// `available` knows (CSS Fonts 4 §5.1 takes the first available entry), else the first named
+/// family even though it is missing, kept so Find Font can replace it, as a missing font is kept
+/// elsewhere. Only a list that names no family but generic ones resolves them, each to an
+/// installed face of its kind (the sans-serif ones to `default`), so `sans-serif` alone never
+/// becomes a family of that name. `None` when nothing resolves (the style keeps its family).
 fn pick_family(value: &str, available: impl Fn(&str) -> bool, default: &str) -> Option<String> {
     let entries: Vec<String> =
         value.split(',').map(|e| e.trim().trim_matches(|c| c == '\'' || c == '"').trim().to_string()).filter(|e| !e.is_empty()).take(64).collect();
+    let is_generic = |e: &str| !generic_candidates(&e.to_ascii_lowercase()).is_empty();
+    let mut named = entries.iter().filter(|e| !is_generic(e));
+    if let Some(first) = named.clone().next() {
+        return Some(named.find(|e| available(e)).unwrap_or(first).clone());
+    }
     for e in &entries {
         let lower = e.to_ascii_lowercase();
-        let generic = generic_candidates(&lower);
-        let is_generic = !generic.is_empty();
-        if !is_generic {
-            if available(e) {
-                return Some(e.clone());
-            }
-            continue;
-        }
-        let sans = matches!(lower.as_str(), "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded");
-        if sans && available(default) {
+        if matches!(lower.as_str(), "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded") && available(default) {
             return Some(default.to_string());
         }
-        if let Some(found) = generic.iter().find(|f| available(f)) {
+        if let Some(found) = generic_candidates(&lower).iter().find(|f| available(f)) {
             return Some((*found).to_string());
         }
     }
-    entries.into_iter().find(|e| generic_candidates(&e.to_ascii_lowercase()).is_empty())
+    None
 }
 
 #[cfg(test)]
@@ -121,7 +118,8 @@ mod family_tests {
         assert_eq!(pick_family("serif", &a, "Source Sans 3").as_deref(), Some("DejaVu Serif"));
         assert_eq!(pick_family("monospace", &a, "Source Sans 3").as_deref(), Some("DejaVu Sans Mono"));
         assert_eq!(pick_family("sans-serif", &a, "Source Sans 3").as_deref(), Some("Source Sans 3"));
-        assert_eq!(pick_family("Nope, SERIF", &a, "Source Sans 3").as_deref(), Some("DejaVu Serif"));
+        assert_eq!(pick_family("SERIF, monospace", &a, "Source Sans 3").as_deref(), Some("DejaVu Serif"));
+        assert_eq!(pick_family("Nope, serif", &a, "Source Sans 3").as_deref(), Some("Nope"), "a named missing family is kept");
     }
 
     #[test]

@@ -1149,15 +1149,15 @@ fn comment_markers_inside_css_strings_are_not_comments() {
     assert_eq!(t.first_style().fill.color().map(|c| c.to_hex()).as_deref(), Some("#ff0000"));
 }
 
-/// A `font-family` list sets type in its first available family (CSS Fonts 4 §5.1), not its first
-/// entry, and the generic `sans-serif` resolves to the default face instead of becoming a family
-/// named "sans-serif" that no font has.
+/// A `font-family` list sets type in its first available named family (CSS Fonts 4 §5.1), not its
+/// first entry; a list of only `sans-serif` resolves to the default face instead of a family named
+/// "sans-serif" that no font has; a list with no named family available keeps its first one.
 #[test]
 fn font_family_list_takes_its_first_available_family() {
     let default = CharStyle::default().font_family;
     assert!(FontDb::global().has_family(&default), "the default face is bundled");
     let d = open(&format!(
-        r#"<text y="20" font-family="'No Such Face', '{default}', serif">a</text><text y="40" font-family="sans-serif">b</text><text y="60" font-family="'No Such Face', 'Other Missing'">c</text>"#
+        r#"<text y="20" font-family="'No Such Face', '{default}', serif">a</text><text y="40" font-family="sans-serif">b</text><text y="60" font-family="'No Such Face', 'Other Missing', sans-serif">c</text>"#
     ));
     let t = texts(&d);
     assert_eq!(t[0].first_style().font_family, default);
