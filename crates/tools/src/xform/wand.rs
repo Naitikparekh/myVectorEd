@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 use vectorcraft_doc::hit::hit_test;
 use vectorcraft_doc::{AnchorRef, NodeId, NodeKind};
-use vectorcraft_geom::Point;
+use vectorcraft_geom::{Line, PathData, PathSeg, Point};
 
 use super::paint_owner;
 use crate::meshedit::{MeshEdit, grid_of};
@@ -77,13 +77,46 @@ fn anchors_json(v: &BTreeSet<AnchorRef>) -> Value {
     Value::Array(v.iter().map(|(s, a)| json!([s, a])).collect())
 }
 
+/// The segments of `path` that the edges of the closed loop `poly` cross with neither of their
+/// anchors inside the loop, as (subpath, segment) pairs: the Lasso selects a path segment it is
+/// dragged around part of ("With the Lasso tool, drag around part of the path segment",
+/// <http://web.archive.org/web/20211230015528/https://helpx.adobe.com/illustrator/using/selecting-objects.html>).
+/// A segment whose ends are both outside the loop and that enters it must cross one of its edges.
+fn lasso_crossed_segments(path: &PathData, poly: &[Point]) -> Vec<AnchorRef> {
+    let Some(&last) = poly.last() else { return vec![] };
+    let edges: Vec<Line> = std::iter::once(last).chain(poly.iter().copied()).zip(poly.iter().copied()).map(|(a, b)| Line::new(a, b)).collect();
+    let mut out = vec![];
+    for (si, sp) in path.subpaths.iter().enumerate() {
+        let n = sp.anchors.len();
+        let count = if sp.closed { n } else { n.saturating_sub(1) };
+        for seg in 0..count {
+            let (Some(a), Some(b)) = (sp.anchors.get(seg), sp.anchors.get((seg + 1) % n)) else { continue };
+            if point_in_polygon(poly, a.p) || point_in_polygon(poly, b.p) {
+                continue;
+            }
+            // A segment with no handles is drawn as a line, as `SubPath::to_bezpath_into` draws it.
+            let piece = if !a.has_out() && !b.has_in() {
+                PathSeg::Line(Line::new(a.p, b.p))
+            } else {
+                PathSeg::Cubic(vectorcraft_geom::CubicBez::new(a.p, a.h_out, b.h_in, b.p))
+            };
+            if edges.iter().any(|e| !piece.intersect_line(*e).is_empty()) {
+                out.push((si, seg));
+            }
+        }
+    }
+    out
+}
+
 /// The selection a closed loop `poly` (even-odd) makes, for the Lasso and the Polygonal Lasso:
-/// the anchor points inside it on every editable path a click can pick, and the gradient mesh
-/// points inside it, which `mesh` keeps picked, with their meshes. `add` (Shift) adds to the
-/// selection and `sub` (Alt) subtracts from it.
-pub(crate) fn lasso_select(cx: &ToolContext, mesh: &mut MeshEdit, poly: &[Point], add: bool, sub: bool) -> Action {
-    // Anchors inside the loop for every editable path the Lasso may pick.
+/// the anchor points inside it on every editable path a click can pick, the segments it crosses
+/// with neither anchor inside it, and the gradient mesh points inside it, which `mesh` keeps
+/// picked, with their meshes. `add` (Shift) adds to the selection and `sub` (Alt) subtracts from
+/// it (a crossed segment is deselected when it is selected).
+pub(crate) fn lasso_select(cx: &ToolContext, mesh: &mut MeshEdit, poly: &[Point], add: bool, sub: bool) -> Vec<Action> {
+    // Anchors inside the loop, and segments it crosses, for every editable path the Lasso may pick.
     let mut hits: Vec<(NodeId, BTreeSet<AnchorRef>)> = vec![];
+    let mut crossed: Vec<(NodeId, Vec<AnchorRef>)> = vec![];
     let mut inside: Vec<(NodeId, usize)> = vec![];
     crate::draw2::walk_pickable(cx, |n| {
         if let Some(grid) = grid_of(n) {
@@ -94,10 +127,24 @@ pub(crate) fn lasso_select(cx: &ToolContext, mesh: &mut MeshEdit, poly: &[Point]
             if !v.is_empty() {
                 hits.push((n.id, v));
             }
+            let segs = lasso_crossed_segments(path, poly);
+            if !segs.is_empty() {
+                crossed.push((n.id, segs));
+            }
         }
     });
     let editable = cx.doc.editable();
     hits.retain(|(id, _)| editable(*id) && cx.doc.is_visible(*id));
+    crossed.retain(|(id, _)| editable(*id) && cx.doc.is_visible(*id));
+    if sub {
+        // Alt deselects only the crossed segments that are selected now.
+        let selected = |id: &NodeId| cx.selection.segments.get(id).cloned().unwrap_or_default();
+        for (id, segs) in &mut crossed {
+            let now = selected(id);
+            segs.retain(|s| now.contains(s));
+        }
+        crossed.retain(|(_, segs)| !segs.is_empty());
+    }
     // The mesh points inside the loop are picked, and their meshes selected whole;
     // Alt deselects a mesh only when it loses its last picked point.
     inside.retain(|(id, _)| editable(*id) && cx.doc.is_visible(*id));
@@ -114,7 +161,13 @@ pub(crate) fn lasso_select(cx: &ToolContext, mesh: &mut MeshEdit, poly: &[Point]
     } else {
         "set"
     };
-    Action::Exec("select.anchorsMany".into(), json!({ "items": items, "mode": mode }))
+    let art = Action::Exec("select.anchorsMany".into(), json!({ "items": items, "mode": mode }));
+    let seg_mode = if sub { "toggle" } else { "add" };
+    let segments = crossed.iter().map(|(id, segs)| {
+        let refs: Vec<Value> = segs.iter().map(|(s, i)| json!([s, i])).collect();
+        Action::Exec("select.segments".into(), json!({ "id": id.0, "segments": refs, "mode": seg_mode }))
+    });
+    std::iter::once(art).chain(segments).collect()
 }
 
 impl Tool for LassoTool {
@@ -147,7 +200,7 @@ impl Tool for LassoTool {
                 if poly.len() < 3 {
                     return if add || sub { vec![] } else { vec![Action::Exec("select.none".into(), json!({}))] };
                 }
-                vec![lasso_select(cx, &mut self.mesh, &poly, add, sub)]
+                lasso_select(cx, &mut self.mesh, &poly, add, sub)
             }
             _ => vec![],
         }
@@ -249,6 +302,47 @@ mod tests {
         assert_eq!(v["items"][0]["anchors"].as_array().unwrap().len(), 1);
         assert_eq!(v["mode"], "set");
         assert!(point_in_polygon(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(0.0, 10.0)], Point::new(2.0, 2.0)));
+    }
+
+    /// A loop dragged around part of a segment, with neither of its anchors inside, selects that
+    /// segment; with Alt it deselects it only when it is selected, and leaves others alone.
+    #[test]
+    fn lasso_selects_a_segment_it_is_dragged_around_part_of() {
+        let (d, id) = doc_with_rect();
+        let p = paint();
+        let run = |s: &Selection, mods: Mods| {
+            let cx = cx(&d, s, &p);
+            let mut t = LassoTool::default();
+            // A triangle across the middle of the top edge (y = 100), no corner inside.
+            t.pointer(&cx, &PointerEvent::new(PointerKind::Down, 140.0, 80.0));
+            t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, 160.0, 80.0));
+            t.pointer(&cx, &PointerEvent::new(PointerKind::Drag, 150.0, 130.0));
+            t.pointer(&cx, &PointerEvent::new(PointerKind::Up, 150.0, 130.0).with_mods(mods))
+        };
+        let a = run(&Selection::default(), Mods::default());
+        assert_eq!(a.len(), 2, "{a:?}");
+        let Action::Exec(c, v) = &a[0] else { panic!() };
+        assert_eq!((c.as_str(), v["items"].as_array().unwrap().len(), v["mode"].as_str()), ("select.anchorsMany", 0, Some("set")));
+        let Action::Exec(c, v) = &a[1] else { panic!() };
+        assert_eq!((c.as_str(), v["id"].as_u64(), v["mode"].as_str()), ("select.segments", Some(id.0), Some("add")));
+        let segs = v["segments"].as_array().unwrap();
+        assert_eq!(segs.len(), 1);
+        let (si, seg) = (segs[0][0].as_u64().unwrap() as usize, segs[0][1].as_u64().unwrap() as usize);
+        let path = d.node(id).and_then(|n| n.path_data()).unwrap();
+        let sp = &path.subpaths[si];
+        let ends = [sp.anchors[seg].p, sp.anchors[(seg + 1) % sp.anchors.len()].p];
+        assert!(ends.iter().all(|q| q.y == 100.0), "the top edge: {ends:?}");
+        // Alt with the segment not selected: nothing to deselect.
+        let alt = Mods { alt: true, ..Default::default() };
+        let a = run(&Selection::default(), alt);
+        assert_eq!(a.len(), 1, "{a:?}");
+        // Alt with it selected: it is toggled off.
+        let mut sel = Selection::default();
+        sel.add(id);
+        sel.segments.insert(id, [(si, seg)].into_iter().collect());
+        let a = run(&sel, alt);
+        let Some(Action::Exec(c, v)) = a.get(1) else { panic!("{a:?}") };
+        assert_eq!((c.as_str(), v["mode"].as_str()), ("select.segments", Some("toggle")));
     }
 
     /// A Lasso loop round a corner of a path warped by a mesh envelope still selects the path's
