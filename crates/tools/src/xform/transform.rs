@@ -370,19 +370,18 @@ impl Tool for TransformTool {
                     vec![preview(m, ev.mods.alt, ev.backquote), Action::Commit]
                 } else {
                     // Reflect: with a reference point already clicked for this selection, a second
-                    // click elsewhere defines the axis through both points and flips the selection
-                    // over it (Shift keeps the axis at 45° steps): "click to set the reference
-                    // point... then click again to define the invisible axis"
-                    // (<http://web.archive.org/web/2021/https://helpx.adobe.com/illustrator/using/rotating-reflecting-objects.html>).
+                    // click elsewhere sets the other point of the invisible axis and flips the
+                    // selection over it (Shift keeps the axis at 45° steps); with Alt it reflects a
+                    // copy (<https://helpx.adobe.com/illustrator/desktop/manage-objects/arrange-objects/reflect-or-flip-objects.html>).
+                    // Alt-click without a reference point still sets it and opens the dialog.
                     if self.kind == TransformKind::Reflect
-                        && !d.alt
                         && let Some((o, ids)) = &self.origin
                         && *ids == cx.selection.objects
                         && !ids.is_empty()
                         && o.distance(d.pick) >= cx.tol(3.0)
                     {
                         let (m, _, _) = self.solve(d.angle_for(false, ev.backquote), *o, d.pick, d.pick, ev.mods.shift, d.bounds);
-                        return vec![Action::Begin(self.kind.label().into()), preview(m, false, ev.backquote), Action::Commit];
+                        return vec![Action::Begin(self.kind.label().into()), preview(m, d.alt, ev.backquote), Action::Commit];
                     }
                     // A click sets the reference point; with Alt, it opens the dialog too.
                     self.origin = Some((d.pick, cx.selection.objects.clone()));
@@ -579,7 +578,8 @@ mod tests {
     }
 
     /// Reflect: a click sets the reference point and a second click elsewhere flips the selection
-    /// over the axis through both points, in one undo step; Shift keeps the axis at 45° steps.
+    /// over the axis through both points, in one undo step; Shift keeps the axis at 45° steps and
+    /// Alt reflects a copy.
     /// The other transform tools' second click only moves the reference point.
     #[test]
     fn reflect_second_click_flips_over_the_axis_through_both_points() {
@@ -612,7 +612,11 @@ mod tests {
         let m: Vec<f64> = v["matrix"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
         let m = Affine::new([m[0], m[1], m[2], m[3], m[4], m[5]]);
         assert!((m * Point::new(100.0, 150.0)).distance(Point::new(100.0, 50.0)) < 1e-9);
-        // Alt-click still opens the dialog at the clicked point.
+        // Alt on the second click reflects a copy.
+        let a = click(&mut t, 300.0, 250.0, alt());
+        assert!(matches!(a.get(1), Some(Action::Preview(_, v)) if v["copy"] == json!(true)), "{a:?}");
+        // Alt-click with no reference point yet sets it and opens the dialog.
+        let mut t = TransformTool::new(TransformKind::Reflect);
         assert!(matches!(&click(&mut t, 250.0, 250.0, alt())[0], Action::Dialog(k, _) if k == "reflect"));
         // Rotate's second click only moves the reference point.
         let mut t = TransformTool::new(TransformKind::Rotate);
