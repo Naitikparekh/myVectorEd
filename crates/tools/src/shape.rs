@@ -2,7 +2,8 @@
 //!
 //! Drag draws (Shift constrains to square/circle/45°, Alt draws from the centre, Space held moves
 //! the shape being drawn); a click without a drag asks the UI for the size dialog (like
-//! Illustrator). ↑/↓ during a polygon/star drag change the side/point count; during a star drag,
+//! Illustrator). ↑/↓ during a polygon/star drag change the side/point count, and during a rounded
+//! rectangle drag its corner radius, ← making the corners square and → as round as they go; during a star drag,
 //! Ctrl/Cmd keeps the inner radius where it is while the outer one follows the pointer, and Alt
 //! keeps the star's shoulders straight (#812). The start point and
 //! the dragged corner snap to Smart Guides ([`DrawSnap`]), hovering before the press too. With Snap
@@ -760,7 +761,8 @@ impl Tool for ShapeTool {
         }
     }
     /// ↑/↓ change a polygon's sides, a star's points or the rounded rectangle's radius while it is
-    /// drawn; Escape turns a widget or selection drag back.
+    /// drawn, and ←/→ give the rounded rectangle square or fully rounded corners; Escape turns a
+    /// widget or selection drag back.
     fn key(&mut self, cx: &ToolContext, key: ToolKey, _mods: Mods) -> Vec<Action> {
         // A drag of the selection: Escape turns it back, as with the Selection tool.
         if self.selection.is_some() {
@@ -803,6 +805,21 @@ impl Tool for ShapeTool {
             }
             ("roundedRectangle", ToolKey::Down) => {
                 self.corner_radius = (self.corner_radius - 1.0).max(0.0);
+                true
+            }
+            // ← squares the corners and → rounds them as far as they go: half the shorter side of
+            // the rectangle being drawn ([Adobe community answer](https://community.adobe.com/t5/illustrator-discussions/help-i-can-t-use-my-up-and-down-buttons-to-adjust-the-corners-of-the-rounded-rectangle-tool/m-p/8662315)).
+            // ↑/↓ go on from there.
+            ("roundedRectangle", ToolKey::Left) => {
+                self.corner_radius = 0.0;
+                true
+            }
+            ("roundedRectangle", ToolKey::Right) => {
+                let r = turned_box(s, self.last, self.mods, cx.constrain_angle).0;
+                let most = r.width().abs().min(r.height().abs()) / 2.0;
+                if most.is_finite() {
+                    self.corner_radius = most.min(MAX_CORNER_RADIUS);
+                }
                 true
             }
             _ => false,
