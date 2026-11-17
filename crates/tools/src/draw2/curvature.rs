@@ -1,7 +1,8 @@
 //! The Curvature tool (Shift+~).
 //!
 //! Each click adds a point and the path curves smoothly through all points; an Alt-click adds a
-//! corner point, the first point included. Alt-click or
+//! corner point, the first point included; Shift-click lines the new point up with the last one
+//! at 45° steps (Constrain Angle), Shift+Alt-click places such a point as a corner. Alt-click or
 //! double-click a point toggles it between smooth and corner; drag a point to move it; click the
 //! first point to close; Backspace/Delete removes the last touched point; Esc/Enter ends the path.
 //! A rubber band shows the curve to the cursor (Enable Rubber Band for Curvature Tool). Each point
@@ -491,10 +492,14 @@ impl CurvatureTool {
 
     /// The path the next click goes on (left out of the snap targets, its anchors still pulling)
     /// and the segment to it: the path being drawn, or the selected one whose end is current.
-    fn leave(&self, cx: &ToolContext) -> Option<(NodeId, Leave)> {
+    /// With `shift` the new point lines up with the last one at the Constrain Angle's 45° steps,
+    /// so the segment between them is straight in that direction (Shift-click; with Alt too, a
+    /// corner so lined up), as Adobe's Curvature tool tutorial describes
+    /// (<https://www.adobe.com/learn/illustrator/web/use-curvature-tool>).
+    fn leave(&self, cx: &ToolContext, shift: bool) -> Option<(NodeId, Leave)> {
         match self.active(cx) {
-            Some(id) => self.pts.last().map(|(p, _)| (id, Leave::segment(cx, *p, false).without_contact())),
-            None => current_end(cx).map(|e| (e.id, Leave::segment(cx, e.p, false).without_contact())),
+            Some(id) => self.pts.last().map(|(p, _)| (id, Leave::segment(cx, *p, shift).without_contact())),
+            None => current_end(cx).map(|e| (e.id, Leave::segment(cx, e.p, shift).without_contact())),
         }
     }
 
@@ -541,7 +546,7 @@ impl CurvatureTool {
             return Some(out);
         }
         if let Some(e) = end {
-            let q = self.snap.press(cx, p, &[e.id], Some(&Leave::segment(cx, e.p, false).without_contact()));
+            let q = self.snap.press(cx, p, &[e.id], Some(&Leave::segment(cx, e.p, ev.mods.shift).without_contact()));
             let how = self.how(&e);
             self.placed = Some(Placed { id: e.id, si: e.si, start: e.start, anchors: e.anchors + 1, corner: ev.mods.alt });
             let v = json!({"id": e.id.0, "subpath": e.si, "op": "extend", "end": e.name(), "x": q.x, "y": q.y, "from": how.name(), "corner": ev.mods.alt});
@@ -571,7 +576,7 @@ impl Tool for CurvatureTool {
         }
         match ev.kind {
             PointerKind::Move => {
-                let (on, from) = self.leave(cx).unzip();
+                let (on, from) = self.leave(cx, ev.mods.shift).unzip();
                 self.hover = Some(self.snap.hover(cx, p, on.as_slice(), from.as_ref()));
                 vec![]
             }
@@ -594,7 +599,7 @@ impl Tool for CurvatureTool {
                         return vec![];
                     }
                     if !self.closed {
-                        let from = self.leave(cx).map(|l| l.1);
+                        let from = self.leave(cx, ev.mods.shift).map(|l| l.1);
                         let p = self.snap.press(cx, p, &[id], from.as_ref());
                         self.pts.push((p, ev.mods.alt));
                         self.current = Some(self.pts.len() - 1);
