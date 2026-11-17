@@ -278,6 +278,7 @@ tools, never checked side by side) isn't captured row by row.
 | Free Transform, Scale and Reflect along a rotated box | done | The Scale and Reflect tools, dialogs and commands and the Transform and Properties panels' flips act along the turned box until Reset Bounding Box; `basis: "page"` keeps the page's axes |
 | Free Transform widget: constrain, free distort, perspective distort; the key-held variants | done | |
 | Transform tools: click sets the reference point (snaps to anchors/centres), Alt-click opens the dialog, Alt-release copies | done | with anchors selected with Direct Selection, the tools, the dialogs and Move transform those anchors alone, about the centre of their box by default (#1408; the default point and whole-object copies are our choices) |
+| Scale tool with Shift: a diagonal drag keeps the proportions, a horizontal or vertical drag (within 22.5°) scales along that axis only | done | WS2; [Scale objects](http://web.archive.org/web/2021/https://helpx.adobe.com/illustrator/using/scaling-shearing-distorting-objects.html); `scale_shift_along_one_axis_for_a_horizontal_or_vertical_drag` |
 | Move, Rotate, Scale, Reflect and Shear dialogs: live Preview; Up/Down step angles and percentages by 1, Shift by 10 | done | #1412; Preview starts off (our choice: the public documentation gives no default), Move's as it was last confirmed; OK is one undo step and Transform Again repeats it |
 | Transform Again, Transform Each, Scale Strokes & Effects, Scale Corners | done | |
 | The Transform effect dialog previews valid typed scale, move, rotation, and Copies values while fields remain focused. Preview off defers the artwork change until OK; Cancel restores the original artwork. | done | `crates/ui-egui/src/panels/tests_appearance.rs` covers numeric input, sliders, artwork targets, preview, and undo. |
@@ -560,6 +561,7 @@ before release (#6373). [Paint faces and edges](https://helpx.adobe.com/illustra
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | WS2: the Scale tool with Shift scales along one axis when the drag runs horizontally or vertically, and keeps proportions only for a diagonal drag. Scores and estimates unchanged. |
 | 2026-11-16 | minor | Recolor Artwork follow-up (#8031, remaining #4028): native Lab input, picker swatch libraries and Assign-row menus; UI interaction regression coverage; scores and estimates unchanged. |
 | 2026-11-16 | minor | Recolor Artwork › Assign: native Lab entry in the Color Picker, swatch libraries access in the picker, and row context menu options (Pick from Swatches, Limit to Library) (#4028). Scores and estimates unchanged. |
 | 2026-11-16 | minor | Color panel: the spectrum fills the vertical space of a resized panel, with options shown or hidden (#8005). Compact auto-fit flyouts and embedded mixers keep their existing size. Evidence: panels::color::tests::the_spectrum_grows_with_the_color_panel. Scores and estimates unchanged. |
