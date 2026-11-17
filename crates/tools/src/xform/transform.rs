@@ -354,6 +354,21 @@ impl Tool for TransformTool {
                     };
                     vec![preview(m, ev.mods.alt, ev.backquote), Action::Commit]
                 } else {
+                    // Reflect: with a reference point already clicked for this selection, a second
+                    // click elsewhere defines the axis through both points and flips the selection
+                    // over it (Shift keeps the axis at 45° steps): "click to set the reference
+                    // point... then click again to define the invisible axis"
+                    // (<http://web.archive.org/web/2021/https://helpx.adobe.com/illustrator/using/rotating-reflecting-objects.html>).
+                    if self.kind == TransformKind::Reflect
+                        && !d.alt
+                        && let Some((o, ids)) = &self.origin
+                        && *ids == cx.selection.objects
+                        && !ids.is_empty()
+                        && o.distance(d.pick) >= cx.tol(3.0)
+                    {
+                        let (m, _, _) = self.solve(d.angle_for(false, ev.backquote), *o, d.pick, d.pick, ev.mods.shift, d.bounds);
+                        return vec![Action::Begin(self.kind.label().into()), preview(m, false, ev.backquote), Action::Commit];
+                    }
                     // A click sets the reference point; with Alt, it opens the dialog too.
                     self.origin = Some((d.pick, cx.selection.objects.clone()));
                     if d.alt { vec![self.dialog(d.pick)] } else { vec![] }
@@ -546,6 +561,49 @@ mod tests {
         let (m, _) = t.matrix_for(Point::new(150.0, 150.0), Point::new(200.0, 200.0), Point::new(250.0, 240.0), true, Rect::ZERO);
         let c = m.as_coeffs();
         assert!((c[0] - c[3]).abs() < 1e-9 && c[0] > 1.0);
+    }
+
+    /// Reflect: a click sets the reference point and a second click elsewhere flips the selection
+    /// over the axis through both points, in one undo step; Shift keeps the axis at 45° steps.
+    /// The other transform tools' second click only moves the reference point.
+    #[test]
+    fn reflect_second_click_flips_over_the_axis_through_both_points() {
+        let (d, id) = doc_with_rect();
+        let mut s = Selection::default();
+        s.add(id);
+        let p = paint();
+        let mut c = cx(&d, &s, &p);
+        c.snap_to_point = false;
+        c.smart_guides = false;
+        let click = |t: &mut TransformTool, x: f64, y: f64, m: Mods| {
+            t.pointer(&c, &ev(PointerKind::Down, x, y).with_mods(m));
+            t.pointer(&c, &ev(PointerKind::Up, x, y).with_mods(m))
+        };
+        let mut t = TransformTool::new(TransformKind::Reflect);
+        assert_eq!(click(&mut t, 300.0, 100.0, Mods::default()), vec![]);
+        // The axis through (300, 100) and (300, 160) is vertical: x mirrors about 300.
+        let a = click(&mut t, 300.0, 160.0, Mods::default());
+        assert_eq!(a.len(), 3, "{a:?}");
+        assert_eq!(a[0], Action::Begin(TransformKind::Reflect.label().into()));
+        assert_eq!(a[2], Action::Commit);
+        let Action::Preview(cmd, v) = &a[1] else { panic!("{a:?}") };
+        assert_eq!((cmd.as_str(), &v["copy"]), ("object.transform", &json!(false)));
+        let m: Vec<f64> = v["matrix"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        let m = Affine::new([m[0], m[1], m[2], m[3], m[4], m[5]]);
+        assert!((m * Point::new(100.0, 100.0)).distance(Point::new(500.0, 100.0)) < 1e-9);
+        // The reference point stays: Shift keeps an axis drawn 10° off level to the horizontal.
+        let a = click(&mut t, 400.0, 117.6, Mods { shift: true, ..Mods::default() });
+        let Some(Action::Preview(_, v)) = a.get(1) else { panic!("{a:?}") };
+        let m: Vec<f64> = v["matrix"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        let m = Affine::new([m[0], m[1], m[2], m[3], m[4], m[5]]);
+        assert!((m * Point::new(100.0, 150.0)).distance(Point::new(100.0, 50.0)) < 1e-9);
+        // Alt-click still opens the dialog at the clicked point.
+        assert!(matches!(&click(&mut t, 250.0, 250.0, alt())[0], Action::Dialog(k, _) if k == "reflect"));
+        // Rotate's second click only moves the reference point.
+        let mut t = TransformTool::new(TransformKind::Rotate);
+        click(&mut t, 300.0, 100.0, Mods::default());
+        assert_eq!(click(&mut t, 300.0, 160.0, Mods::default()), vec![]);
+        assert_eq!(t.reference_point(&c), Some(Point::new(300.0, 160.0)));
     }
 
     #[test]
