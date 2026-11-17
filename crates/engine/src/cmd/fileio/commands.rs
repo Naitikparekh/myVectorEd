@@ -1,6 +1,6 @@
 use super::access::file_list;
 use super::formats::formats;
-use super::{CommandSpec, action_batch, always, batch, cmd, export, has_doc, has_selection, load, pdfimport, psdlayers, save, screens};
+use super::{CommandSpec, action_batch, always, batch, cmd, export, has_doc, has_selection, load, pair, pdfimport, psdlayers, save, screens};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -169,5 +169,6 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
     .into_iter()
     .chain(save::specs())
+    .chain(pair::specs())
     .collect()
 }
