@@ -211,10 +211,25 @@ impl TransformTool {
                 let ratio = |a: f64, b: f64| if a.abs() > 1e-6 { b / a } else { 1.0 };
                 let (mut sx, mut sy) = (ratio(d0.x, d1.x), ratio(d0.y, d1.y));
                 if shift {
-                    let l2 = d0.hypot2();
-                    let k = if l2 > 1e-12 { d1.dot(d0) / l2 } else { 1.0 };
-                    sx = k;
-                    sy = k;
+                    // Shift keeps the proportions when the drag runs diagonally, and scales along
+                    // one axis when it runs horizontally or vertically: "To maintain the object's
+                    // proportions as you scale, hold down Shift as you drag diagonally. To scale
+                    // the object along one axis, hold down Shift as you begin dragging vertically
+                    // or horizontally"
+                    // (<http://web.archive.org/web/2021/https://helpx.adobe.com/illustrator/using/scaling-shearing-distorting-objects.html>).
+                    // The drag's direction is taken in 45° steps, as Shift constrains a move.
+                    let drag = d1 - d0;
+                    let tan = std::f64::consts::FRAC_PI_8.tan();
+                    if drag.hypot2() > 1e-12 && drag.y.abs() <= drag.x.abs() * tan {
+                        sy = 1.0;
+                    } else if drag.hypot2() > 1e-12 && drag.x.abs() <= drag.y.abs() * tan {
+                        sx = 1.0;
+                    } else {
+                        let l2 = d0.hypot2();
+                        let k = if l2 > 1e-12 { d1.dot(d0) / l2 } else { 1.0 };
+                        sx = k;
+                        sy = k;
+                    }
                 }
                 let clamp = |s: f64| if s.abs() < 1e-4 { 1e-4f64.copysign(s) } else { s };
                 let (sx, sy) = (clamp(sx), clamp(sy));
@@ -546,6 +561,26 @@ mod tests {
         let (m, _) = t.matrix_for(Point::new(150.0, 150.0), Point::new(200.0, 200.0), Point::new(250.0, 240.0), true, Rect::ZERO);
         let c = m.as_coeffs();
         assert!((c[0] - c[3]).abs() < 1e-9 && c[0] > 1.0);
+    }
+
+    /// Shift with a drag that runs horizontally or vertically scales along that axis only; a
+    /// diagonal drag keeps the proportions.
+    #[test]
+    fn scale_shift_along_one_axis_for_a_horizontal_or_vertical_drag() {
+        let t = TransformTool::new(TransformKind::Scale);
+        let (o, start) = (Point::new(150.0, 150.0), Point::new(200.0, 200.0));
+        // Horizontal drag, a little off level: only the width changes.
+        let (m, _) = t.matrix_for(o, start, Point::new(250.0, 205.0), true, Rect::ZERO);
+        let c = m.as_coeffs();
+        assert!((c[0] - 2.0).abs() < 1e-9 && (c[3] - 1.0).abs() < 1e-9, "{c:?}");
+        // Vertical drag: only the height changes.
+        let (m, _) = t.matrix_for(o, start, Point::new(195.0, 250.0), true, Rect::ZERO);
+        let c = m.as_coeffs();
+        assert!((c[0] - 1.0).abs() < 1e-9 && (c[3] - 2.0).abs() < 1e-9, "{c:?}");
+        // Without Shift the same horizontal drag scales both ways.
+        let (m, _) = t.matrix_for(o, start, Point::new(250.0, 205.0), false, Rect::ZERO);
+        let c = m.as_coeffs();
+        assert!((c[3] - 1.1).abs() < 1e-9, "{c:?}");
     }
 
     #[test]
