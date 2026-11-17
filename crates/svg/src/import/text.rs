@@ -56,6 +56,83 @@ const MAX_LINE_GAP: f64 = 10_000.0;
 /// characters of one text add in all: past it, a gap is one break as wide as the gap.
 const MAX_LINE_BREAKS: usize = 10_000;
 
+/// Installed families tried, in order, for a CSS generic family (CSS Fonts 4 §2.1.3 leaves the
+/// choice to the user agent). `sans-serif` and `system-ui` take `default` (the app's own default
+/// face, always available) before these.
+fn generic_candidates(generic: &str) -> &'static [&'static str] {
+    match generic {
+        "serif" | "ui-serif" => &["Times New Roman", "Times", "Liberation Serif", "Noto Serif", "DejaVu Serif", "Source Serif 4", "Georgia"],
+        "monospace" | "ui-monospace" => {
+            &["Courier New", "Courier", "Liberation Mono", "Noto Sans Mono", "DejaVu Sans Mono", "Source Code Pro", "Menlo", "Consolas"]
+        }
+        "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded" => &["Arial", "Helvetica", "Liberation Sans", "Noto Sans", "DejaVu Sans"],
+        "cursive" => &["Comic Sans MS", "Apple Chancery", "URW Chancery L", "Z003"],
+        "fantasy" => &["Impact", "Papyrus"],
+        _ => &[],
+    }
+}
+
+/// The family a CSS `font-family` list `value` sets type in: the first entry that `available`
+/// knows, as CSS picks it (CSS Fonts 4 §5.1), with a generic family resolved to an installed face
+/// of its kind, or to `default` for the sans-serif ones. With nothing in the list available, the
+/// first named (non-generic) family, kept so Find Font can replace it; `None` when the list names
+/// only generic families none of which resolve (the style keeps its family).
+fn pick_family(value: &str, available: impl Fn(&str) -> bool, default: &str) -> Option<String> {
+    let entries: Vec<String> =
+        value.split(',').map(|e| e.trim().trim_matches(|c| c == '\'' || c == '"').trim().to_string()).filter(|e| !e.is_empty()).take(64).collect();
+    for e in &entries {
+        let lower = e.to_ascii_lowercase();
+        let generic = generic_candidates(&lower);
+        let is_generic = !generic.is_empty();
+        if !is_generic {
+            if available(e) {
+                return Some(e.clone());
+            }
+            continue;
+        }
+        let sans = matches!(lower.as_str(), "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded");
+        if sans && available(default) {
+            return Some(default.to_string());
+        }
+        if let Some(found) = generic.iter().find(|f| available(f)) {
+            return Some((*found).to_string());
+        }
+    }
+    entries.into_iter().find(|e| generic_candidates(&e.to_ascii_lowercase()).is_empty())
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::pick_family;
+
+    fn have<'a>(fonts: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
+        move |f: &str| fonts.iter().any(|x| x.eq_ignore_ascii_case(f))
+    }
+
+    #[test]
+    fn the_first_available_family_in_the_list_wins() {
+        let a = have(&["Arial", "Source Sans 3"]);
+        assert_eq!(pick_family("'Missing Face', Arial, sans-serif", &a, "Source Sans 3").as_deref(), Some("Arial"));
+    }
+
+    #[test]
+    fn generic_families_resolve_to_an_installed_face_of_their_kind() {
+        let a = have(&["Source Sans 3", "DejaVu Serif", "DejaVu Sans Mono"]);
+        assert_eq!(pick_family("serif", &a, "Source Sans 3").as_deref(), Some("DejaVu Serif"));
+        assert_eq!(pick_family("monospace", &a, "Source Sans 3").as_deref(), Some("DejaVu Sans Mono"));
+        assert_eq!(pick_family("sans-serif", &a, "Source Sans 3").as_deref(), Some("Source Sans 3"));
+        assert_eq!(pick_family("Nope, SERIF", &a, "Source Sans 3").as_deref(), Some("DejaVu Serif"));
+    }
+
+    #[test]
+    fn a_list_with_nothing_available_keeps_its_first_named_family() {
+        let a = have(&[]);
+        assert_eq!(pick_family("Inter, \"Other Face\", sans-serif", &a, "Source Sans 3").as_deref(), Some("Inter"));
+        assert_eq!(pick_family("serif", &a, "Source Sans 3"), None);
+        assert_eq!(pick_family("  ", &a, "Source Sans 3"), None);
+    }
+}
+
 /// A whitespace/comma separated list.
 fn list(v: &str) -> impl Iterator<Item = &str> {
     v.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty())
@@ -941,11 +1018,10 @@ impl Ctx {
         }
         let css = &self.css;
         let mut st = CharStyle::default();
-        if let Some(f) = self.prop(n, "font-family") {
-            let fam = f.split(',').next().unwrap_or("").trim().trim_matches(|c| c == '\'' || c == '"').to_string();
-            if !fam.is_empty() {
-                st.font_family = fam;
-            }
+        if let Some(f) = self.prop(n, "font-family")
+            && let Some(fam) = pick_family(&f, |name| FontDb::global().has_family(name), &st.font_family)
+        {
+            st.font_family = fam;
         }
         let size = self.font_size(n);
         st.size = size;
