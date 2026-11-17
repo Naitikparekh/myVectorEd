@@ -4,8 +4,10 @@
 //! corner point, the first point included; Shift-click lines the new point up with the last one
 //! at 45° steps (Constrain Angle), Shift+Alt-click places such a point as a corner. Alt-click or
 //! double-click a point toggles it between smooth and corner; drag a point to move it; click the
-//! first point to close; Backspace/Delete removes the last touched point; Esc/Enter ends the path.
-//! A rubber band shows the curve to the cursor (Enable Rubber Band for Curvature Tool). Each point
+//! first point to close (keeping its kind; an Alt-click there closes and toggles it, so a curved
+//! start becomes a corner, as Adobe's Curvature tool tutorial describes,
+//! <https://www.adobe.com/learn/illustrator/web/use-curvature-tool>); Backspace/Delete removes
+//! the last touched point; Esc/Enter ends the path. A rubber band shows the curve to the cursor (Enable Rubber Band for Curvature Tool). Each point
 //! placed or dragged snaps to Smart Guides ([`DrawSnap`]), as the Pen's anchors do.
 //!
 //! It edits any selected path too, whatever drew it, keeping its shape except where edited
@@ -584,11 +586,14 @@ impl Tool for CurvatureTool {
                 if let Some(id) = active {
                     if let Some(i) = self.hit_point(cx, p) {
                         let was_current = self.current.replace(i);
+                        let closes = i == 0 && !self.closed && self.pts.len() >= 3;
                         if ev.mods.alt {
+                            // An Alt-click on the first point closes the path too.
                             self.pts[i].1 = !self.pts[i].1;
+                            self.closed |= closes;
                             return vec![Action::Exec("path.curvature".into(), self.params())];
                         }
-                        if i == 0 && !self.closed && self.pts.len() >= 3 {
+                        if closes {
                             self.closed = true;
                             return vec![Action::Exec("path.curvature".into(), self.params())];
                         }

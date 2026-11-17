@@ -637,3 +637,25 @@ fn shift_click_lines_the_new_point_up_with_the_last() {
     let a = t.pointer(&cx, &ev);
     assert!(matches!(edit_op(&a[0]), Some(("extend", v)) if (v["y"].as_f64().unwrap() - 60.0).abs() < 1e-9), "{a:?}");
 }
+
+/// A click on the first point of the path being drawn closes it and keeps the point's kind; an
+/// Alt-click there closes it too and toggles the point, so a curved start becomes a corner and a
+/// corner start a curve ([Curvature tool tutorial](https://www.adobe.com/learn/illustrator/web/use-curvature-tool)).
+#[test]
+fn alt_click_on_the_first_point_closes_and_toggles_it() {
+    let p = paint();
+    for (start_corner, alt) in [(false, true), (true, true), (false, false), (true, false)] {
+        let pts = vec![(pt(100.0, 100.0), start_corner), (pt(200.0, 50.0), false), (pt(300.0, 120.0), false)];
+        let (d, id) = doc_with(curvature_spline(&pts, false));
+        let s = selected(id, None);
+        let cx = quiet(&d, &s, &p);
+        let mut t = CurvatureTool { pts, id: Some(id), ..CurvatureTool::default() };
+        let m = Mods { alt, ..Mods::default() };
+        assert_eq!(t.cursor(&cx, pt(100.0, 100.0), m), Cursor::PenClose, "alt {alt}");
+        let a = press(&mut t, &cx, 100.0, 100.0, alt);
+        assert!(matches!(&a[0], Action::Exec(c, v) if c == "path.curvature" && v["closed"] == true), "{a:?}");
+        assert!(t.closed);
+        assert_eq!(t.pts[0].1, start_corner != alt, "start corner {start_corner}, alt {alt}");
+        assert_eq!(t.pts.len(), 3);
+    }
+}
