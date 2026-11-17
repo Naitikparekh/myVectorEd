@@ -587,3 +587,53 @@ fn the_measurement_label_shows_with_the_rubber_band_off() {
     t.pointer(&off, &PointerEvent::new(PointerKind::Move, from.x, from.y));
     assert!(measure(&t.overlays(&off)).is_empty());
 }
+
+/// Shift-click lines the new point up with the last one at 45° steps, so the segment between
+/// them is straight in that direction; Shift+Alt-click places such a point as a corner. The
+/// rubber band follows the same constrained point, and so does a click going on from the current
+/// end of a selected path ([Curvature tool tutorial](https://www.adobe.com/learn/illustrator/web/use-curvature-tool)).
+#[test]
+fn shift_click_lines_the_new_point_up_with_the_last() {
+    let d = Document::new(800.0, 600.0);
+    let p = paint();
+    let s = Selection::default();
+    let mut t = CurvatureTool::default();
+    press(&mut t, &quiet(&d, &s, &p), 100.0, 100.0, false);
+    // As the engine does it: the path being drawn is the selection with one anchor per point.
+    let sp = curvature_spline(&t.pts, false);
+    let (d, id) = doc_with(sp);
+    t.id = Some(id);
+    let s = selected(id, None);
+    let cx = quiet(&d, &s, &p);
+    let shift = Mods { shift: true, ..Mods::default() };
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Move, 200.0, 112.0).with_mods(shift));
+    let h = t.hover.unwrap();
+    assert!((h.y - 100.0).abs() < 1e-9, "the rubber band ends level with the last point: {h:?}");
+    let a = t.pointer(&cx, &PointerEvent::new(PointerKind::Down, 200.0, 112.0).with_mods(shift));
+    assert!(matches!(&a[0], Action::Exec(c, _) if c == "path.curvature"), "{a:?}");
+    let (q, corner) = t.pts[1];
+    assert!((q.y - 100.0).abs() < 1e-9 && q.x > 150.0 && !corner, "{q:?}");
+    // Without Shift the point lands where clicked.
+    let mut free = CurvatureTool { pts: vec![(pt(100.0, 100.0), false)], id: Some(id), ..CurvatureTool::default() };
+    free.pointer(&cx, &PointerEvent::new(PointerKind::Down, 200.0, 112.0));
+    assert_eq!(free.pts[1].0, pt(200.0, 112.0));
+
+    // Shift+Alt: a corner straight below the last point.
+    let (d, id) = doc_with(curvature_spline(&t.pts, false));
+    t.id = Some(id);
+    let s = selected(id, None);
+    let cx = quiet(&d, &s, &p);
+    let alt_shift = Mods { alt: true, shift: true, ..Mods::default() };
+    t.pointer(&cx, &PointerEvent::new(PointerKind::Down, q.x + 9.0, 220.0).with_mods(alt_shift));
+    let (r, corner) = t.pts[2];
+    assert!((r.x - q.x).abs() < 1e-9 && r.y > 150.0 && corner, "{r:?}");
+
+    // Going on from the current end of a selected path.
+    let (d, id) = doc_with(wave());
+    let s = selected(id, Some(4));
+    let cx = quiet(&d, &s, &p);
+    let mut t = CurvatureTool::default();
+    let ev = PointerEvent::new(PointerKind::Down, 560.0, 70.0).with_mods(shift);
+    let a = t.pointer(&cx, &ev);
+    assert!(matches!(edit_op(&a[0]), Some(("extend", v)) if (v["y"].as_f64().unwrap() - 60.0).abs() < 1e-9), "{a:?}");
+}
