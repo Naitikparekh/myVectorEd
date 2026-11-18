@@ -33,6 +33,8 @@ pub use graphics::{
     rename_appearance_graphic_symbol,
 };
 
+pub(crate) mod material;
+
 pub(crate) mod shadow;
 
 pub(crate) mod wireframe;
@@ -288,6 +290,7 @@ fn validate_solid_params(id: &str, p: &Value) -> Result<(), String> {
     }
     crate::lighting::validate(p)?;
     shadow::validate(p)?;
+    material::validate(id, p)?;
     graphics::validate(id, p)?;
     wireframe::validate_render(id, p)?;
     if let Some(v) = p.get("bevel")
@@ -643,7 +646,29 @@ pub fn validate_three_d_params(id: &str, p: &Value) -> Result<(), String> {
 /// with the faces of other solids. Under colored lights a gradient with transparent stops is drawn
 /// opaque under one mask of its transparency, placed once on all the facets when it has no
 /// placement of its own ([`crate::lighting::opaque_surface_paint`]).
-fn surface(n: &Node, facets: Vec<Facet>, paint: &Paint, opacity: f32, blend: BlendMode, colored: bool, faces: bool) -> Node {
+/// `facets` without their smooth light ramps when a material shades them: [`material::fills`] shades
+/// each facet flat from its normal, so it is neither a composite nor laid over an underlay.
+fn flat_under(mut facets: Vec<Facet>, materials: Option<&material::Materials>) -> Vec<Facet> {
+    if materials.is_some() {
+        for face in &mut facets {
+            face.rgb_gradient = None;
+        }
+    }
+    facets
+}
+
+#[allow(clippy::too_many_arguments)]
+fn surface(
+    n: &Node,
+    facets: Vec<Facet>,
+    paint: &Paint,
+    opacity: f32,
+    blend: BlendMode,
+    colored: bool,
+    faces: bool,
+    materials: Option<&material::Materials>,
+) -> Node {
+    let facets = flat_under(facets, materials);
     if !faces && composites_facets(&facets, paint, colored) {
         let mut group = crate::lighting::solid_surface(n.id, &facets, paint);
         group.opacity = opacity;
@@ -664,7 +689,10 @@ fn surface(n: &Node, facets: Vec<Facet>, paint: &Paint, opacity: f32, blend: Ble
             {
                 return Arc::new(crate::lighting::facet_art(n.id, &face.path(), paint, g, seam));
             }
-            let items = crate::lighting::fills(paint, face.illumination, face.brightness, colored);
+            let items = match materials.and_then(|m| Some((m, m.of(&face)?))) {
+                Some((m, material)) => material::fills(paint, material, &m.view, &face, colored),
+                None => crate::lighting::fills(paint, face.illumination, face.brightness, colored),
+            };
             let items = items
                 .into_iter()
                 .flat_map(|item| {
@@ -1780,6 +1808,7 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
     let p = crate::merged_params(&fx.id, &fx.params);
     let classic = fx.id == CLASSIC_EXTRUDE || fx.id == CLASSIC_ROTATE;
     let colored = !classic && view_options(&p).has_colored_lights();
+    let mats = material::materials(&fx.id, &p);
     let masks = has_masks(shapes);
     // The paint copies of every solid together: past the allowance the source path is drawn.
     let mut paint_bytes = 0usize;
@@ -1798,6 +1827,7 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
                 #[cfg(test)]
                 SOLIDS_BUILT.with(|n| n.set(n.get() + 1));
                 let (f, faces) = facets_and_faces(ROTATE, &area, rule, b, &p, cast).ok()?;
+                let f = flat_under(f, mats.as_ref());
                 built.push(faces);
                 if !crate::revolve::paint_copies_add(&mut paint_bytes, facet_copies(&f, &paint, colored), &paint) {
                     return None;
@@ -1808,8 +1838,11 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
                         filled.push(Filled { at: out.len(), member, caps, opacity, blend, masked: masks_surface(&paint, colored) });
                     }
                 }
-                let art =
-                    if classic { classic::surface(n, f, &paint, opacity, blend, &p) } else { surface(n, f, &paint, opacity, blend, colored, false) };
+                let art = if classic {
+                    classic::surface(n, f, &paint, opacity, blend, &p)
+                } else {
+                    surface(n, f, &paint, opacity, blend, colored, false, mats.as_ref())
+                };
                 out.push((s.scopes.as_slice(), Arc::new(art)));
             }
         }
@@ -1822,6 +1855,7 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
     let mut built = vec![];
     for ((item, opacity, _, _, scopes, member), f) in parts.iter().zip(built_solids_cast(&fx.id, &p, &parts, bounds, MAX_OBJECT_FACES, cast)) {
         let item: &AppearanceItem = item;
+        let f = f.map(|f| f.map(|(f, faces)| (flat_under(f, mats.as_ref()), faces)));
         match f {
             Ok(Some((f, _))) if !crate::revolve::paint_copies_add(&mut paint_bytes, facet_copies(&f, paint_ref(item), colored), paint_ref(item)) => {
                 return None;
@@ -1925,7 +1959,7 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
             let art = if classic {
                 classic::surface(n, f, &paint, opacity, blend, &p)
             } else {
-                surface(n, f, &paint, opacity, blend, colored, split && shared.get(shape).copied().unwrap_or(false))
+                surface(n, f, &paint, opacity, blend, colored, split && shared.get(shape).copied().unwrap_or(false), mats.as_ref())
             };
             (depths, art, scopes, ends)
         })
@@ -2517,3 +2551,6 @@ mod tests_shadow;
 
 #[cfg(test)]
 mod tests_revolve_order;
+
+#[cfg(test)]
+mod tests_material;

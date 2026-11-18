@@ -91,7 +91,8 @@ pages describe it.
   can be exported. Adding the assets is one undo step; when every one of the objects is an asset already, nothing is
   recorded and their assets are selected again.
 - The Lighting tab also holds the Shadows switch and its settings ([Shadows](#shadows)). The Materials tab holds
-  the Graphics ([Graphics](#graphics)); base materials and ray-traced rendering are not built (see below). The
+  the Graphics ([Graphics](#graphics)); base materials are set through `material` and `sideMaterial`
+  ([Materials](#materials)); ray-traced rendering is not built (see below). The
   rotation and light rings on the artboard are part of the options dialog only. The panel's Lighting tab has the
   lighting widget instead ([Lighting widget](#lighting-widget)).
 
@@ -436,6 +437,7 @@ Inflate and Rotate has a **Shadows** switch with those three settings below it.
 | Position | **Behind Object** (the default): on a plane square to the view, behind the object. **Below Object**: on the floor under the object, square to its own vertical axis and turned with it. |
 | Distance from Object | 0–100 %, default 0 %: how far the plane is from the object, as a share of the object's largest size. |
 | Shadow Bounds | 10–400 %, default 100 %: how far the plane reaches. At 100 % it is a square four times the object's largest size across, about the foot of the object's center; the shadow is cut at its edges. |
+| Lights casting (`shadowLights`) | `first` (the default): the first light alone casts. `all`: every light that lights something casts a shadow of its own, blurred by its own Softness, as dark as its Intensity against the brightest light's (the brightest at 50 %, a light half as bright at 25 %). Each light's shadow is a path of its own, the first light's lowest; where they overlap they darken each other. VectorCraft's own setting and reading. |
 
 Our reading:
 
@@ -453,7 +455,7 @@ Our reading:
   it the blur radius is Softness × the object's largest size × (5 % + 20 % × Distance from Object), at most
   1,000 pt. At 100 % Softness a 100 pt object casts a shadow blurred by 5 pt on a plane that touches it and by
   25 pt at 100 % Distance. This mapping is our own. The blur scales with the object, and it draws, takes room and
-  exports as a Gaussian Blur effect does. Only the first light casts a
+  exports as a Gaussian Blur effect does. Unless `shadowLights` is `all`, only the first light casts a
   shadow.
 - A shadow is cast from at most 327,680 faces, the solids of one object together (our own limit). Past it, a
   command is refused with "The 3D shadow is too complex; turn Shadows off or simplify the art", and a loaded
@@ -462,6 +464,32 @@ Our reading:
   limits) casts no shadow.
 - Canvas, SVG and PDF exports draw the shadow, the art's bounds take it in (with its blur), and Expand Appearance
   keeps it below the faces: a hard shadow as a path, a blurred one as an image. Extrude & Bevel (Classic), Revolve (Classic) and Rotate (Classic) have no shadow.
+
+## Materials
+
+The public [3D and Materials panel options](https://helpx.adobe.com/illustrator/desktop/special-effects-styles/create-3d-graphics/3d-materials-panel-options.html)
+page lists a material's Roughness and Metallic, each from 0 to 1. Extrude & Bevel, Inflate and Rotate take a
+material for their faces (`effect.apply`, `effect.setParams`):
+
+| Setting | |
+|---|---|
+| `material` | null (the default: shading as without a material) or an object with `preset`, `baseColor`, `roughness` and `metallic`, all optional. It covers every face. |
+| `sideMaterial` | The same, for the sides only (Extrude & Bevel's walls and bevels, Inflate's sides); null takes `material`. So the caps and the sides can differ. |
+| `preset` | One of VectorCraft's own default materials, each two numbers (no Adobe or Substance material is copied): `default` (Roughness 0.6, Metallic 0), `matte` (1, 0), `satin` (0.45, 0), `gloss` (0.15, 0), `brushedMetal` (0.5, 1), `polishedMetal` (0.1, 1). `roughness` and `metallic` given with it win. Without a preset a material starts at `default`. |
+| `baseColor` | Opaque `#rrggbb`, or null (the default) to keep the paint of the fill or stroke the solid is built for. |
+| `roughness` | 0 (polished) to 1 (matte). |
+| `metallic` | 0 (dielectric) to 1 (metal). |
+
+Our reading (the documentation gives no formula): ambient and diffuse light multiply the base color as without a
+material, and Metallic lowers the diffuse light to a fifth at 1. Each light that reaches a face adds a highlight
+where the face mirrors it toward the eye (Blinn–Phong): its exponent runs from 1,024 at Roughness 0 to 2 at 1, and
+its peak strength is (1 − Roughness)², so a fully rough material has no highlight and draws as the diffuse
+shading. The highlight is white at half strength on a dielectric and the base color on a metal, times the light's
+color and intensity. Solid colors and every stop of a gradient are shaded this way; patterns keep their shading
+without a material. A material shades each facet flat from its normal: colored Inflate's smooth light ramps
+are not used while a material is set. Revolve and the 3D (Classic) effects do not take materials, and values out
+of range, unknown keys and materials on other effects are rejected before editing; an invalid material in a loaded
+file is left out.
 
 ## Graphics
 
@@ -551,7 +579,7 @@ These rules are VectorCraft's own:
 `threeD.inflate`: `depth`, `volume` (%), `bothSides`. All three take the view and lighting parameters Revolve
 uses: `rotationX`, `rotationY`, `rotationZ`, `perspectiveAngle` (degrees), `shade`, `lightColor` (`#rrggbb`, default `#ffffff`), `lightIntensity` (%), `lightRotation`,
 `lightHeight` (degrees), `lightSoftness` (%), `ambient` (%, to 200), `lightBehind`. Lengths are points and scale with the object (Scale Strokes & Effects).
-Commands validate the shape and the parameters before the document changes. All four also take `lights`: null (the default, use the earlier single-light fields), or an array of one to ten objects. Each object takes `color` (opaque `#rrggbb`, white), `intensity` (0..100%, 80), `rotation` (-180..180 degrees, 125.26), `height` (0..90 degrees, 30), `softness` (0..100%, 0), and `behind` (boolean, false). Omitted settings use those defaults. An explicit list replaces the earlier single light; `ambient` and `shade` remain shared. Set `lights` to null to return to the single-light fields. Invalid lists, counts, keys and values are rejected before editing; malformed loaded lists fall back to the earlier light safely. All four take `shadow` (boolean, false), `shadowPosition` (`behind` or `below`), `shadowDistance` (0..100%, 0) and `shadowBounds` (10..400%, 100) ([Shadows](#shadows)); values out of range are rejected before editing.
+Commands validate the shape and the parameters before the document changes. All four also take `lights`: null (the default, use the earlier single-light fields), or an array of one to ten objects. Each object takes `color` (opaque `#rrggbb`, white), `intensity` (0..100%, 80), `rotation` (-180..180 degrees, 125.26), `height` (0..90 degrees, 30), `softness` (0..100%, 0), and `behind` (boolean, false). Omitted settings use those defaults. An explicit list replaces the earlier single light; `ambient` and `shade` remain shared. Set `lights` to null to return to the single-light fields. Invalid lists, counts, keys and values are rejected before editing; malformed loaded lists fall back to the earlier light safely. All four take `shadow` (boolean, false), `shadowPosition` (`behind` or `below`), `shadowDistance` (0..100%, 0) and `shadowBounds` (10..400%, 100) and `shadowLights` (`first` or `all`) ([Shadows](#shadows)); values out of range are rejected before editing.
 `threeD.extrude`, `threeD.rotate` and `threeD.revolve` take `graphics` ([Graphics](#graphics)): an array of up to 64 objects, each
 with `symbol` (the name of a document symbol), `face` (`front` or `back`, default `front`; `threeD.rotate` and
 `threeD.revolve` take `front` only), `x` and `y` (points, default 0), `scale` (1..10000%, default 100) and `rotation` (-360..360 degrees,
@@ -568,9 +596,12 @@ pages, and the archived Extrude & Bevel option list (depth 0–2,000, cap on/off
 out, perspective). No Adobe software, assets, presets or bevel shapes were used.
 
 - **Materials** (base and Adobe Substance), graphics on Inflate and on Extrude & Bevel's walls and bevels,
+  and **ray-traced rendering** are not built (shadows of every light are opt-in, `shadowLights`): shading uses directional
+- **Materials**: base materials (Roughness, Metallic, base color) are built ([Materials](#materials)); Adobe
+  Substance materials, the panel's material thumbnails, graphics on Inflate and on Extrude & Bevel's walls and bevels,
   shadows of lights after the first, and **ray-traced rendering** are not built: shading uses directional
   lights, in the paint of the fill or stroke the solid is built for ([Fills and strokes](#fills-and-strokes)), and
-  only the first light casts a shadow ([Shadows](#shadows)). Graphics map onto planar faces and Revolve's side only
+  by default only the first light casts a shadow ([Shadows](#shadows)). Graphics map onto planar faces and Revolve's side only
   ([Graphics](#graphics)).
 - The bevel shapes and their names are our own; custom bevel paths are not supported.
 - Visibility is a painter's algorithm: faces of a closed solid turned away are left out, and the rest are drawn
@@ -627,6 +658,8 @@ Release measurements and a repeatable CLI scene are in [3D lighting performance]
 
 | Date | Change |
 |---|---|
+| 2026-11-18 | Shadows from every light: `shadowLights: "all"` lets each light that lights something cast its own shadow, blurred by its own Softness and as dark as its share of the brightest light ([Shadows](#shadows)). The default keeps the first light alone. |
+| 2026-11-18 | Base materials: `material` and `sideMaterial` on Extrude & Bevel, Inflate and Rotate, with Roughness, Metallic, a base color and six original presets; a Blinn–Phong highlight whose size follows Roughness and whose tint follows Metallic ([Materials](#materials)). |
 | 2026-11-13 | Extrude & Bevel cuts its walls into slices only for a twist. A taper alone keeps each wall flat, so it is one face, without the light ticks at the joints between slices or the light line down a wall (#7019). Inflate still slices its sides for a taper. |
 | 2026-11-12 | The seams of Extrude & Bevel, Inflate and Rotate under a white light, and of the faces of Extrude & Bevel (Classic), Revolve (Classic) and Rotate (Classic), went from miter to round joins (the seams of Revolve and of colored lights, and 3D (Classic) Wireframe edges, were already round): no thorns on edge-on facets, and facets with no neighbor now have rounded convex corners ([Seams](#seams)). |
 | 2026-11-08 | Contours that cross, touch or overlap are merged by vectorcraft-pathops before Extrude & Bevel, Inflate and Rotate build a solid, sharing its limits; others are built as drawn. |

@@ -52,11 +52,14 @@ pub struct Shadow {
     /// The casting light's Softness (0..1): at 0 the shadow is hard-edged, above it blurred
     /// ([`ShadowPlane::blur`]).
     pub softness: f64,
+    /// Every light that lights something casts a shadow of its own ([`ShadowCaster::shadow_planes`]),
+    /// each blurred by its own Softness, rather than the first light alone.
+    pub all_lights: bool,
 }
 
 impl Default for Shadow {
     fn default() -> Self {
-        Self { position: ShadowPosition::Behind, distance: 0.0, bounds: 1.0, softness: 0.0 }
+        Self { position: ShadowPosition::Behind, distance: 0.0, bounds: 1.0, softness: 0.0, all_lights: false }
     }
 }
 
@@ -99,13 +102,19 @@ impl Projection {
     /// The unit direction toward the first light, in view space; `None` when it lights nothing:
     /// Shading is off or its intensity is 0.
     fn light(&self) -> Option<V3> {
-        let first = self.view.lights.and_then(|l| l.iter().next().copied());
-        let intensity = first.map_or(self.view.light_intensity, |l| l.intensity);
-        if !self.view.shade || intensity <= 0.0 {
-            return None;
+        self.lights().into_iter().next().flatten().map(|(v, ..)| v)
+    }
+
+    /// Each light of the view in order: its unit direction toward it in view space, its intensity
+    /// and its Softness; `None` for a light that lights nothing (Shading is off or its intensity is 0).
+    fn lights(&self) -> Vec<Option<(V3, f64, f64)>> {
+        let lit = |[x, y, z]: [f64; 3], intensity: f64, softness: f64| {
+            (self.view.shade && intensity > 0.0).then(|| (V3(x, y, z).unit(), intensity, softness))
+        };
+        match self.view.lights {
+            Some(lights) => lights.iter().map(|l| lit(l.direction(), l.intensity, l.softness)).collect(),
+            None => vec![lit(self.view.light_direction(), self.view.light_intensity, self.view.light_softness)],
         }
-        let [x, y, z] = first.map_or_else(|| self.view.light_direction(), |l| l.direction());
-        Some(V3(x, y, z).unit())
     }
 }
 
@@ -258,8 +267,35 @@ impl ShadowCaster {
     /// center follow from them), for [`ShadowCaster::path_on`]: `None` when there are none or when
     /// the first light lights nothing or does not reach the plane.
     pub fn shadow_plane(&self, shadow: Shadow, faces: &[Range<usize>]) -> Option<ShadowPlane> {
+        let light = self.projection?.light()?;
+        self.plane_for(light, shadow, faces)
+    }
+
+    /// The planes the shadows of `shadow` fall on, each with the share (0..1] of the darkness its
+    /// light casts: the first light's plane alone at full darkness, or with
+    /// [`Shadow::all_lights`] one for each light that lights something and reaches its plane, as
+    /// dark as its intensity against the brightest light's and blurred by its own Softness.
+    /// VectorCraft's own reading of shadows from several lights.
+    pub fn shadow_planes(&self, shadow: Shadow, faces: &[Range<usize>]) -> Vec<(ShadowPlane, f64)> {
+        if !shadow.all_lights {
+            return self.shadow_plane(shadow, faces).map(|plane| (plane, 1.0)).into_iter().collect();
+        }
+        let Some(p) = self.projection else { return vec![] };
+        let lights: Vec<_> = p.lights().into_iter().flatten().collect();
+        let brightest = lights.iter().map(|l| l.1).fold(0.0, f64::max);
+        if brightest <= 0.0 || !brightest.is_finite() {
+            return vec![];
+        }
+        lights
+            .into_iter()
+            .filter_map(|(light, intensity, softness)| {
+                Some((self.plane_for(light, Shadow { softness, ..shadow }, faces)?, (intensity / brightest).clamp(0.0, 1.0)))
+            })
+            .collect()
+    }
+
+    fn plane_for(&self, light: V3, shadow: Shadow, faces: &[Range<usize>]) -> Option<ShadowPlane> {
         let p = self.projection?;
-        let light = p.light()?;
         let s = shadow.sanitized();
         let corners = || self.within(faces).flat_map(|(contours, _)| contours.iter().flatten());
         let first = *corners().next()?;

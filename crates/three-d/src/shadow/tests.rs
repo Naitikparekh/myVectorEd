@@ -489,3 +489,38 @@ fn an_inflate_shape_that_casts_nothing_builds_no_solid() {
         assert!(none.is_empty() && none.projection.is_none());
     }
 }
+
+#[test]
+fn every_light_casts_its_own_shadow_when_asked() {
+    let left = Light { rotation: 180.0, height: 45.0, intensity: 0.8, softness: 0.0, ..Light::default() };
+    let right = Light { rotation: 0.0, height: 45.0, intensity: 0.4, softness: 1.0, ..Light::default() };
+    let off = Light { intensity: 0.0, ..Light::default() };
+    let view = View { lights: Some(Lights::new(&[left, right, off]).unwrap()), ..front() };
+    let mut caster = ShadowCaster::new();
+    let path = square(100.0, 100.0, 100.0);
+    let all = caster.extrude(&path, FillRule::NonZero, Rect::new(100.0, 100.0, 200.0, 200.0), Extrude::default(), view).unwrap();
+    let all = std::slice::from_ref(&all);
+    let shadow = Shadow { distance: 0.5, ..Shadow::default() };
+    // By default the first light alone casts.
+    let first = caster.shadow_planes(shadow, all);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].1, 1.0);
+    assert_eq!(Some(first[0].0), caster.shadow_plane(shadow, all));
+    // Every light that lights something: the third (intensity 0) casts nothing.
+    let planes = caster.shadow_planes(Shadow { all_lights: true, ..shadow }, all);
+    assert_eq!(planes.len(), 2);
+    assert_eq!(planes[0].1, 1.0);
+    assert!((planes[1].1 - 0.5).abs() < 1e-12, "half as bright, half as dark");
+    // Each blurred by its own Softness.
+    assert_eq!(planes[0].0.blur(), 0.0);
+    assert!(planes[1].0.blur() > 0.0);
+    // The light on the left casts to the right of the object, the light on the right to the left.
+    let to_right = caster.path_on(&planes[0].0, all).unwrap().bounds().unwrap();
+    let to_left = caster.path_on(&planes[1].0, all).unwrap().bounds().unwrap();
+    assert!(to_right.x1 > 200.0 + 1.0 && to_left.x0 < 100.0 - 1.0, "{to_right:?} {to_left:?}");
+    // Shading off: no light casts.
+    let unlit = View { shade: false, ..view };
+    let mut caster = ShadowCaster::new();
+    let r = caster.extrude(&path, FillRule::NonZero, Rect::new(100.0, 100.0, 200.0, 200.0), Extrude::default(), unlit).unwrap();
+    assert!(caster.shadow_planes(Shadow { all_lights: true, ..shadow }, std::slice::from_ref(&r)).is_empty());
+}

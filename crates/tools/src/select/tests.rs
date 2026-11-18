@@ -2665,3 +2665,27 @@ fn outline_view_marquees_measure_a_clip_group_by_its_plain_clipping_path() {
     assert_eq!(marquee(true), vec![Action::Exec("select.set".into(), json!({"ids": [g.0]}))]);
     assert_eq!(marquee(false), vec![Action::Exec("select.set".into(), json!({"ids": []}))]);
 }
+
+/// Cmd/Ctrl+Shift-click adds the object behind the selected one to the selection, rather than
+/// replacing the selection with it as Cmd/Ctrl-click does; on a stack whose objects are all
+/// selected it cycles back to the topmost and takes it out.
+#[test]
+fn a_cmd_shift_click_adds_the_object_behind_to_the_selection() {
+    let (mut d, bottom) = doc_with_rect();
+    let l = d.layers[0].id;
+    let top = d.alloc_id();
+    let square = vectorcraft_geom::shapes::rectangle(Rect::new(120.0, 120.0, 180.0, 180.0));
+    d.insert(Some(l), 1, vectorcraft_doc::Node::path(top, square, vectorcraft_doc::Appearance::default_art())).unwrap();
+    let p = paint();
+    let press = |s: &Selection, m: Mods| SelectionTool::default().pointer(&cx(&d, s, &p), &ev(PointerKind::Down, 150.0, 150.0).with_mods(m));
+    let both = Mods { cmd: true, shift: true, ..Mods::default() };
+    let mut s = Selection::default();
+    s.set([top]);
+    assert_eq!(press(&s, both), vec![Action::Exec("select.toggle".into(), json!({"id": bottom.0}))]);
+    assert_eq!(press(&s, Mods { cmd: true, ..Mods::default() }), vec![Action::Exec("select.set".into(), json!({"ids": [bottom.0]}))]);
+    // Nothing selected there: the topmost is added.
+    assert_eq!(press(&Selection::default(), both), vec![Action::Exec("select.toggle".into(), json!({"id": top.0}))]);
+    // Both selected: back to the topmost, which the toggle takes out.
+    s.set([top, bottom]);
+    assert_eq!(press(&s, both), vec![Action::Exec("select.toggle".into(), json!({"id": top.0}))]);
+}

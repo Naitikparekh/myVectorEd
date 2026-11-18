@@ -149,7 +149,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Ruby…",
             [],
             None,
-            "{ids?|id?, start?: byte, end?: byte, text?: reading, position?: above|below (vertical type: right|left), align?: start|center|end, size?: 1–100 (percent of the base text's size, default 50), overhang?: bool (default true), remove?: bool} set the ruby (furigana) over the selected text's bytes in `start..end` (without them: all its text): the reading over the base characters, above them in horizontal type and right of them in vertical type; `remove` takes the ruby off the range instead; no undo step when the ruby does not change (the same reading and options again, or `remove` where there is none) → {ids, ruby: [{start, end, text, position, align, sizePercent, overhang}…] (the first object's ruby)}",
+            "{ids?|id?, start?: byte, end?: byte, text?: reading, position?: above|below (vertical type: right|left), align?: start|center|end|oneTwoOne|equalSpace (the last two spread a reading shorter than its base over it: 1-2-1, the JIS rule, with half a gap at each end, or equal gaps; a longer reading is centred), size?: 1–100 (percent of the base text's size, default 50), overhang?: bool (default true), mono?: bool (default false), remove?: bool} set the ruby (furigana) over the selected text's bytes in `start..end` (without them: all its text): the reading over the base characters, above them in horizontal type and right of them in vertical type; with `mono` (mono ruby), the reading holds one part per base character, separated by spaces or ideographic spaces, each set over its own character, and a reading with another number of parts is set over the whole base without its spaces; `remove` takes the ruby off the range instead; no undo step when the ruby does not change (the same reading and options again, or `remove` where there is none) → {ids, ruby: [{start, end, text, position, align, sizePercent, overhang, kind?: \"mono\"}…] (the first object's ruby)}",
             has_selection,
             ruby
         ),
@@ -285,13 +285,16 @@ fn ruby(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some("center") | Some("centre") => RubyAlign::Center,
         Some("start") | Some("left") | Some("top") => RubyAlign::Start,
         Some("end") | Some("right") | Some("bottom") => RubyAlign::End,
-        Some(_) => return Err(bad(C, "`align` is start, center or end")),
+        Some("onetwoone") | Some("1-2-1") | Some("jis") => RubyAlign::OneTwoOne,
+        Some("equalspace") => RubyAlign::EqualSpace,
+        Some(_) => return Err(bad(C, "`align` is start, center, end, oneTwoOne or equalSpace")),
     };
     let size = number_or(p, "size", 50.0, C)?;
     if !size.is_finite() || !(1.0..=100.0).contains(&size) {
         return Err(bad(C, "`size` is a percentage of the base text's size, 1 to 100"));
     }
     let overhang = switch_or(p, "overhang", true, C)?;
+    let kind = if switch_or(p, "mono", false, C)? { vectorcraft_doc::RubyKind::Mono } else { vectorcraft_doc::RubyKind::Group };
     let mut first: Option<Value> = None;
     // The same reading again, or a removal where there is no ruby, is no undo step.
     edit_if_nodes_changed(s, "Ruby", &ids, |d| {
@@ -313,6 +316,7 @@ fn ruby(s: &mut Session, p: &Value) -> Result<Value> {
                 span.align = align;
                 span.size_percent = size;
                 span.overhang = overhang;
+                span.kind = kind;
                 t.ruby.push(span);
             }
             t.normalize_ruby();
@@ -1634,6 +1638,43 @@ mod ruby_tests {
             assert!(s.execute("type.ruby", &p).is_err(), "{p}");
         }
         assert!(text_of(&s, id).ruby.is_empty());
+    }
+
+    /// `type.ruby {mono: true}` sets mono ruby: saved as mono, reported with `kind`, and laid out
+    /// with each part over its own character (one reading per character, here two glyphs of ruby
+    /// over 漢 and one over 字); a mono reading is no undo step when set again, and `mono` must be
+    /// a switch.
+    #[test]
+    fn ruby_command_sets_mono_ruby() {
+        let (mut s, id) = session_with_text();
+        let r = s.execute("type.ruby", &json!({"text": "かん じ", "start": 0, "end": 6, "mono": true})).unwrap();
+        assert_eq!(r["ruby"][0]["kind"], "mono");
+        let t = text_of(&s, id);
+        assert_eq!(t.ruby[0].kind, vectorcraft_doc::RubyKind::Mono);
+        let lay = vectorcraft_text::layout(vectorcraft_text::FontDb::global(), t);
+        let mut groups = t.clone();
+        groups.ruby = vec![RubySpan::new(0, 3, "かん"), RubySpan::new(3, 6, "じ")];
+        let split = vectorcraft_text::layout(vectorcraft_text::FontDb::global(), &groups);
+        let at = |l: &vectorcraft_text::TextLayout| l.ruby.iter().map(|g| g.origin).collect::<Vec<_>>();
+        assert_eq!(at(&lay), at(&split));
+        let reopened = vectorcraft_format::load(&vectorcraft_format::save(&s.doc().unwrap().doc, false)).unwrap();
+        let Some(NodeKind::Text(back)) = reopened.node(NodeId(id)).map(|n| &n.kind) else { panic!("text") };
+        assert_eq!(back.ruby, t.ruby);
+        assert!(s.execute("type.ruby", &json!({"text": "かん じ", "mono": "yes"})).is_err());
+    }
+
+    /// `type.ruby`'s `align` takes the JIS 1-2-1 rule and equal space by name, saved with the type.
+    #[test]
+    fn ruby_command_takes_the_one_two_one_and_equal_space_alignments() {
+        let (mut s, id) = session_with_text();
+        for (name, align) in [("oneTwoOne", RubyAlign::OneTwoOne), ("1-2-1", RubyAlign::OneTwoOne), ("equalSpace", RubyAlign::EqualSpace)] {
+            let r = s.execute("type.ruby", &json!({"text": "かん", "start": 0, "end": 12, "align": name})).unwrap();
+            assert_eq!(text_of(&s, id).ruby[0].align, align, "{name}");
+            assert_eq!(r["ruby"][0]["align"], serde_json::to_value(align).unwrap());
+        }
+        let reopened = vectorcraft_format::load(&vectorcraft_format::save(&s.doc().unwrap().doc, false)).unwrap();
+        let Some(NodeKind::Text(back)) = reopened.node(NodeId(id)).map(|n| &n.kind) else { panic!("text") };
+        assert_eq!(back.ruby[0].align, RubyAlign::EqualSpace);
     }
 
     #[test]
