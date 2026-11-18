@@ -219,6 +219,15 @@ pub enum RubyAlign {
     Start,
     /// Ending at the base text's end (right in horizontal type, bottom in vertical).
     End,
+    /// The JIS 1-2-1 rule: a reading shorter than its base spreads over it, the space before its
+    /// first character and after its last half the space between its characters (W3C JLREQ 3.3.7,
+    /// https://www.w3.org/TR/jlreq/#positioning_of_jukugoruby). A reading as long as its base or
+    /// longer is centred.
+    OneTwoOne,
+    /// Equal space: a reading shorter than its base spreads over it with the same space before its
+    /// first character, between its characters and after its last. A reading as long as its base or
+    /// longer is centred.
+    EqualSpace,
 }
 
 /// Ruby (furigana, phonetic guide): a reading set over a range of the text.
