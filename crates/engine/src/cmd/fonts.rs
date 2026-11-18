@@ -2124,6 +2124,7 @@ mod tests {
                 align: Default::default(),
                 size_percent: 50.0,
                 overhang: true,
+                kind: Default::default(),
             });
         });
         assert_eq!(found(&mut s), Some(0));

@@ -666,3 +666,65 @@ fn auto_alignment_saves_readable_by_older_builds() {
     // Files from before the flag keep their alignment.
     assert_eq!(serde_json::from_str::<ParaStyle>(r#"{"justify":"Center"}"#).unwrap().justify, Justify::Center);
 }
+
+/// A custom kinsoku set is saved with its paragraph only when there is one, reads back as saved,
+/// and a set read from a file keeps at most `KINSOKU_SET_MAX_CHARS` characters per list, with
+/// duplicates and control characters left out.
+#[test]
+fn a_custom_kinsoku_set_is_saved_only_when_set_and_bounded_on_read() {
+    let plain = ParaStyle::default();
+    assert!(serde_json::to_value(&plain).unwrap().get("kinsoku_set").is_none());
+    let set = KinsokuSet { name: "Mine".into(), no_start: "」。".into(), no_end: "「".into(), hanging: "。".into(), inseparable: "—".into() };
+    let with = ParaStyle { kinsoku_set: Some(set.clone()), ..ParaStyle::default() };
+    let saved = serde_json::to_value(&with).unwrap();
+    assert_eq!(saved["kinsoku_set"]["noStart"], "」。");
+    assert_eq!(serde_json::from_value::<ParaStyle>(saved).unwrap(), with);
+    let long: String = ('\u{4E00}'..).take(KINSOKU_SET_MAX_CHARS + 10).collect();
+    let read: ParaStyle =
+        serde_json::from_value(serde_json::json!({"kinsoku_set": {"name": "x\u{0}y", "noStart": long, "noEnd": "「「\n「（"}})).unwrap();
+    let read = read.kinsoku_set.unwrap();
+    assert_eq!(read.no_start.chars().count(), KINSOKU_SET_MAX_CHARS);
+    assert_eq!((read.name.as_str(), read.no_end.as_str(), read.hanging.as_str()), ("xy", "「（", ""));
+}
+
+/// A custom Mojikumi set is saved with its paragraph only when there is one, reads back as saved,
+/// and a set read from a file keeps its Japanese–Latin space to 0 to half an em.
+#[test]
+fn a_custom_mojikumi_set_is_saved_only_when_set_and_bounded_on_read() {
+    let plain = ParaStyle::default();
+    assert!(serde_json::to_value(&plain).unwrap().get("mojikumi_set").is_none());
+    let set = MojikumiSet {
+        name: "Mine".into(),
+        punctuation: MojikumiPunctuation::Shared,
+        line_start_flush: true,
+        line_end_half: true,
+        line_end_dot: false,
+        latin_space: 0.125,
+    };
+    let with = ParaStyle { mojikumi: Mojikumi::Custom, mojikumi_set: Some(set), ..ParaStyle::default() };
+    let saved = serde_json::to_value(&with).unwrap();
+    assert_eq!((saved["mojikumi"].as_str(), saved["mojikumi_set"]["punctuation"].as_str()), (Some("custom"), Some("shared")));
+    assert_eq!(serde_json::from_value::<ParaStyle>(saved).unwrap(), with);
+    for (read, kept) in [(9.0, MOJIKUMI_LATIN_SPACE_MAX), (-1.0, 0.0)] {
+        let p: ParaStyle = serde_json::from_value(serde_json::json!({"mojikumi_set": {"name": "x", "latinSpace": read}})).unwrap();
+        assert_eq!(p.mojikumi_set.unwrap().latin_space, kept);
+    }
+}
+
+/// Mono ruby (JLREQ 3.3) is saved only when mono, and splits its reading into one part per base
+/// character (a voicing mark staying with its character); a reading with another number of parts,
+/// and group ruby, give no parts.
+#[test]
+fn mono_ruby_splits_its_reading_per_base_character() {
+    let mut r = RubySpan::new(0, 6, "かん　じ");
+    assert!(serde_json::to_value(&r).unwrap().get("kind").is_none());
+    assert_eq!(r.mono_parts("漢字"), None, "group ruby");
+    r.kind = RubyKind::Mono;
+    let saved = serde_json::to_value(&r).unwrap();
+    assert_eq!(saved["kind"], "mono");
+    assert_eq!(serde_json::from_value::<RubySpan>(saved).unwrap(), r);
+    assert_eq!(r.mono_parts("漢字"), Some(vec![(0, 3, "かん".to_string()), (3, 6, "じ".to_string())]));
+    assert_eq!(r.mono_parts("漢字字"), None, "two parts, three characters");
+    let marked = RubySpan { kind: RubyKind::Mono, ..RubySpan::new(0, 9, "a b") };
+    assert_eq!(marked.mono_parts("か\u{3099}x"), Some(vec![(0, 6, "a".to_string()), (6, 7, "b".to_string())]));
+}

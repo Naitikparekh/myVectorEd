@@ -53,7 +53,8 @@ pub fn length_range(id: &str, key: &str) -> Option<std::ops::RangeInclusive<f64>
 
 /// The range of parameter `key` of effect `id` when it is a size in pixels of the Document Raster
 /// Effects resolution (`{maxRadius: px 4..127 (8), …}`), which no unit setting changes and which
-/// stays in pixels when the resolution does; `None` for other parameters.
+/// Document Raster Effects Settings scales by a change of resolution, so the effect keeps its look
+/// (Resolution Independent Effects); `None` for other parameters.
 pub fn raster_px_range(id: &str, key: &str) -> Option<std::ops::RangeInclusive<f64>> {
     documented_range(id, key, "px")
 }
@@ -679,7 +680,7 @@ pub fn effect_catalog() -> Vec<EffectInfo> {
             "pixelate.colorHalftone",
             "Color Halftone…",
             PIXELATE,
-            "{maxRadius: px 4..127 (8; the radius of a dot at full strength, which fills its square cell, in pixels of the Document Raster Effects resolution), channel1: screen angle deg -360..360 (108), channel2: deg (162), channel3: deg (90), channel4: deg (45)} screens each colour channel (red, green, blue: channels 1 to 3; in CMYK documents cyan, magenta, yellow, black: 1 to 4) at its angle into dots whose area follows the channel's mean over their cell",
+            "{maxRadius: px 4..127 (8; the radius of a dot at full strength, which fills its square cell, in pixels of the Document Raster Effects resolution; a change of that resolution scales it, within this range, so the dots keep their size), channel1: screen angle deg -360..360 (108), channel2: deg (162), channel3: deg (90), channel4: deg (45)} screens each colour channel (red, green, blue: channels 1 to 3; in CMYK documents cyan, magenta, yellow, black: 1 to 4) at its angle into dots whose area follows the channel's mean over their cell",
             json!({"maxRadius": 8.0, "channel1": 108.0, "channel2": 162.0, "channel3": 90.0, "channel4": 45.0}),
         ),
         r(

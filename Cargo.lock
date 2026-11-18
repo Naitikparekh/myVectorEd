@@ -6828,6 +6828,7 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
+ "sha2",
  "skrifa 0.47.0",
  "thiserror 2.0.21",
  "tiff",
