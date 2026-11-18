@@ -18,18 +18,26 @@ const SHADOW_OPACITY: f32 = 0.5;
 /// Blur radii below this, in points, leave the shadow hard-edged.
 const MIN_BLUR: f64 = 0.01;
 
-/// The shadow `p` asks for, or `None` with the switch off or when the first light lights nothing
-/// (Shading is off or its intensity is 0), so that no shadow is built. Its softness is the first
-/// light's.
+/// The lights `shadowLights` lets cast a shadow: the first alone (the default) or every one.
+pub(crate) const SHADOW_LIGHTS: [&str; 2] = ["first", "all"];
+
+/// The shadow `p` asks for, or `None` with the switch off or when no casting light lights anything
+/// (Shading is off or the intensity is 0: the first light's, or with `shadowLights` `all` every
+/// light's), so that no shadow is built. Its softness is the first light's; with every light
+/// casting, each light's shadow takes its own ([`vectorcraft_three_d::ShadowCaster::shadow_planes`]).
 pub(crate) fn options(p: &Value) -> Option<Shadow> {
-    let first = crate::lighting::lights(p).and_then(|l| l.iter().next().copied());
+    let lights = crate::lighting::lights(p);
+    let first = lights.and_then(|l| l.iter().next().copied());
+    let all_lights = text(p, "shadowLights", "first") == "all";
     let intensity = first.map_or_else(|| num(p, "lightIntensity", 80.0), |l| l.intensity);
-    let lit = flag(p, "shade", true) && intensity > 0.0;
+    let any = all_lights && lights.is_some_and(|l| l.iter().any(|l| l.intensity > 0.0));
+    let lit = flag(p, "shade", true) && (intensity > 0.0 || any);
     (lit && flag(p, "shadow", false)).then(|| Shadow {
         position: ShadowPosition::parse(text(p, "shadowPosition", "behind")).unwrap_or_default(),
         distance: num(p, "shadowDistance", 0.0) / 100.0,
         bounds: num(p, "shadowBounds", 100.0) / 100.0,
         softness: first.map_or_else(|| num(p, "lightSoftness", 0.0) / 100.0, |l| l.softness),
+        all_lights,
     })
 }
 
@@ -37,6 +45,9 @@ pub(crate) fn options(p: &Value) -> Option<Shadow> {
 pub(crate) fn validate(p: &Value) -> Result<(), String> {
     if p.get("shadow").is_some_and(|v| !v.is_boolean()) {
         return Err("shadow must be true or false".into());
+    }
+    if p.get("shadowLights").is_some_and(|v| !v.as_str().is_some_and(|s| SHADOW_LIGHTS.contains(&s))) {
+        return Err("shadowLights must be first or all".into());
     }
     if p.get("shadowPosition").is_some_and(|v| v.as_str().and_then(ShadowPosition::parse).is_none()) {
         return Err("shadowPosition must be behind or below".into());
@@ -73,10 +84,21 @@ pub(crate) fn casts(opacity: f32) -> bool {
 /// black at [`SHADOW_OPACITY`] times its opacity, in its blending mode, with the nonzero rule, and
 /// with the light's Softness a Gaussian Blur of the plane's radius ([`ShadowPlane::blur`]), which
 /// is drawn, measured, exported and expanded as that effect is; `None` when it casts nothing.
+/// With every light casting, each light's shadow is a path of its own, as dark as the light's share
+/// ([`ShadowCaster::shadow_planes`]), together in a group.
 pub(crate) fn art(id: NodeId, caster: &ShadowCaster, shadow: Shadow, ink: Ink) -> Option<Node> {
     let all = 0..caster.len();
     let all = std::slice::from_ref(&all);
-    piece(id, caster, &caster.shadow_plane(shadow, all)?, all, ink)
+    let mut pieces: Vec<Node> = caster
+        .shadow_planes(shadow, all)
+        .into_iter()
+        .filter_map(|(plane, share)| piece(id, caster, &plane, all, Ink { opacity: ink.opacity * share as f32, ..ink }))
+        .collect();
+    match pieces.len() {
+        0 => None,
+        1 => pieces.pop(),
+        _ => Some(Node::group(id, pieces.into_iter().map(Arc::new).collect())),
+    }
 }
 
 /// [`art`] of the faces in the ranges `faces` of `caster` only, on `plane`.
@@ -108,7 +130,10 @@ type Run<'a> = (&'a [Scope], Ink, Vec<Range<usize>>);
 /// and each piece is drawn in their opacity masks and blending modes ([`super::masked`]).
 pub(crate) fn scoped_art(id: NodeId, caster: &ShadowCaster, shadow: Shadow, cast: Vec<Cast<'_>>, masks: bool) -> Vec<Arc<Node>> {
     let placing: Vec<Range<usize>> = cast.iter().map(|(.., faces)| faces.clone()).collect();
-    let Some(plane) = caster.shadow_plane(shadow, &placing) else { return vec![] };
+    let planes = caster.shadow_planes(shadow, &placing);
+    if planes.is_empty() {
+        return vec![];
+    }
     // Consecutive solids in the same ink (and with masks, the same scopes) share a piece; the pieces
     // keep the solids' order.
     let mut runs: Vec<Run> = vec![];
@@ -118,6 +143,12 @@ pub(crate) fn scoped_art(id: NodeId, caster: &ShadowCaster, shadow: Shadow, cast
             _ => runs.push((scopes, ink, vec![faces])),
         }
     }
-    let pieces = runs.into_iter().filter_map(|(scopes, ink, faces)| Some((scopes, Arc::new(piece(id, caster, &plane, &faces, ink)?))));
+    // Each light's shadow below the next one's, each piece in the order of the solids.
+    let pieces = planes.iter().flat_map(|(plane, share)| {
+        runs.iter().filter_map(move |(scopes, ink, faces)| {
+            let ink = Ink { opacity: ink.opacity * *share as f32, ..*ink };
+            Some((*scopes, Arc::new(piece(id, caster, plane, faces, ink)?)))
+        })
+    });
     if masks { super::masked(id, pieces.collect()) } else { pieces.map(|(_, piece)| piece).collect() }
 }

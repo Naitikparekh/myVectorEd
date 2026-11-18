@@ -488,3 +488,28 @@ fn art_whose_opacity_is_not_a_finite_number_casts_no_shadow() {
         }
     }
 }
+
+#[test]
+fn shadow_lights_all_casts_a_shadow_from_each_light_as_dark_as_its_share() {
+    let lights = json!([
+        {"rotation": 180, "height": 45, "intensity": 80},
+        {"rotation": 0, "height": 45, "intensity": 40},
+    ]);
+    for id in CASTING {
+        let mut n = square_node(1, 0.0);
+        let p = json!({"shadow": true, "shadowDistance": 50, "lights": lights});
+        n.appearance.effects.push(crate::new_effect(id, &p).unwrap());
+        let one = art(&n, id).unwrap();
+        let mut opacities = vec![];
+        one.walk(&mut |c| opacities.extend(shadow_opacity(c)));
+        assert_eq!(opacities, [0.5], "{id}: the first light alone by default");
+        let mut all = p.clone();
+        all["shadowLights"] = json!("all");
+        n.appearance.effects[0].params = all;
+        let two = art(&n, id).unwrap();
+        let mut opacities = vec![];
+        two.walk(&mut |c| opacities.extend(shadow_opacity(c)));
+        assert_eq!(opacities, [0.5, 0.25], "{id}: each light's shadow, the dimmer one lighter");
+        assert!(validate_three_d(&n, id, &json!({"shadowLights": "some"})).is_err());
+    }
+}
