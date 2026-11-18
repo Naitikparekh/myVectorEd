@@ -30,7 +30,9 @@ pub use para_style::{
     Mojikumi, ParaDirection, ParaStyle, SingleWordJustify,
 };
 pub use runs::PATH_LEAD_MAX;
-pub use runs::{INLINE_CHAR, INLINE_MAX_SCALE, InlineArt, RubyAlign, RubyPosition, RubySpan, TextKind, TextRun, TextStyleDef, TypeAntiAlias};
+pub use runs::{
+    INLINE_CHAR, INLINE_MAX_SCALE, InlineArt, RubyAlign, RubyKind, RubyPosition, RubySpan, TextKind, TextRun, TextStyleDef, TypeAntiAlias,
+};
 pub use tabs_lists::{
     Bullet, DEFAULT_TAB_INTERVAL, LIST_HANGING_INDENT, LIST_LEVEL_INDENT, LIST_LEVELS, ListAlign, ListCounts, NumberStyle, ParaList, TabAlign,
     TabStop,

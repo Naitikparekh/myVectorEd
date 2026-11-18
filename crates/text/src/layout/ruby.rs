@@ -59,7 +59,8 @@ fn ruby_pieces(cx: &Ctx<'_>, t: &TextObject) -> Vec<RubyPiece> {
     by_byte.sort_by_key(|&i| byte_of(i));
     let longest = cx.out.glyphs.iter().map(|g| g.len.max(1)).max().unwrap_or(1);
     let mut pieces = Vec::new();
-    for span in &t.ruby {
+    let spans: Vec<std::borrow::Cow<'_, vectorcraft_doc::text::RubySpan>> = t.ruby.iter().flat_map(|span| per_base(span, cx.text)).collect();
+    for span in spans.iter().map(|s| &**s) {
         let (start, end) = (span.start.min(text_len), span.end.min(text_len));
         if start >= end || span.text.trim().is_empty() {
             continue;
@@ -86,6 +87,25 @@ fn ruby_pieces(cx: &Ctx<'_>, t: &TextObject) -> Vec<RubyPiece> {
         collect_ruby_pieces_for_span(cx, span, start, total, &by_line, &mut pieces);
     }
     pieces
+}
+
+/// The readings `span` sets: itself for group ruby; for mono ruby (W3C JLREQ 3.3) a group reading
+/// over each base character with its own part of the reading, or when the parts don't match the
+/// base characters, the whole reading over the whole base as group ruby, its spaces left out.
+fn per_base<'a>(span: &'a vectorcraft_doc::text::RubySpan, text: &str) -> Vec<std::borrow::Cow<'a, vectorcraft_doc::text::RubySpan>> {
+    use std::borrow::Cow;
+    use vectorcraft_doc::RubyKind;
+    if span.kind == RubyKind::Group {
+        return vec![Cow::Borrowed(span)];
+    }
+    let base = text.get(span.start..span.end).unwrap_or_default();
+    let group = |text: String, start: usize, end: usize| {
+        Cow::Owned(vectorcraft_doc::text::RubySpan { start, end, text, kind: RubyKind::Group, ..span.clone() })
+    };
+    match span.mono_parts(base) {
+        Some(parts) => parts.into_iter().map(|(a, b, part)| group(part, span.start + a, span.start + b)).collect(),
+        None => vec![group(span.text.chars().filter(|&c| c != ' ' && c != '\u{3000}').collect(), span.start, span.end)],
+    }
 }
 
 fn collect_ruby_pieces_for_span(

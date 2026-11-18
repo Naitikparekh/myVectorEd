@@ -221,6 +221,25 @@ pub enum RubyAlign {
     End,
 }
 
+/// Group ruby or mono ruby (W3C JLREQ 3.3, https://www.w3.org/TR/jlreq/#ruby_and_emphasis_dots).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RubyKind {
+    /// Group ruby: one reading over the whole base text.
+    #[default]
+    Group,
+    /// Mono ruby: each base character has its own reading, set over that character alone. The
+    /// reading holds one part per base character, the parts separated by spaces (U+0020 or the
+    /// ideographic space U+3000).
+    Mono,
+}
+
+impl RubyKind {
+    fn is_group(&self) -> bool {
+        *self == RubyKind::Group
+    }
+}
+
 /// Ruby (furigana, phonetic guide): a reading set over a range of the text.
 ///
 /// `start`/`end` are byte offsets into [`TextObject::plain_text`] (the same space as
@@ -247,12 +266,46 @@ pub struct RubySpan {
     /// squeezed to the base's width.
     #[serde(default = "yes")]
     pub overhang: bool,
+    /// Group or mono ruby; saved only when mono.
+    #[serde(default, skip_serializing_if = "RubyKind::is_group")]
+    pub kind: RubyKind,
 }
 
 impl RubySpan {
     /// Ruby over `start..end` with reading `text`, at the defaults (half size, centred, overhanging).
     pub fn new(start: usize, end: usize, text: impl Into<String>) -> Self {
-        Self { start, end, text: text.into(), position: RubyPosition::Above, align: RubyAlign::Center, size_percent: 50.0, overhang: true }
+        Self {
+            start,
+            end,
+            text: text.into(),
+            position: RubyPosition::Above,
+            align: RubyAlign::Center,
+            size_percent: 50.0,
+            overhang: true,
+            kind: RubyKind::Group,
+        }
+    }
+
+    /// Mono ruby over base text `base` (the span's own bytes of the plain text): each base
+    /// character's byte range, relative to the span's start, with its part of the reading. None for
+    /// group ruby, and for mono ruby whose reading does not hold one part for each base character
+    /// (it is then set as group ruby, its spaces left out). A combining mark is part of the character
+    /// before it.
+    pub fn mono_parts(&self, base: &str) -> Option<Vec<(usize, usize, String)>> {
+        if self.kind != RubyKind::Mono {
+            return None;
+        }
+        let parts: Vec<&str> = self.text.split([' ', '\u{3000}']).filter(|p| !p.is_empty()).collect();
+        let mut chars: Vec<(usize, usize)> = Vec::new();
+        for (i, c) in base.char_indices() {
+            let end = i + c.len_utf8();
+            let mark = matches!(c, '\u{0300}'..='\u{036F}' | '\u{3099}' | '\u{309A}' | '\u{FE00}'..='\u{FE0F}');
+            match chars.last_mut() {
+                Some(last) if mark => last.1 = end,
+                _ => chars.push((i, end)),
+            }
+        }
+        (parts.len() == chars.len() && !chars.is_empty()).then(|| chars.into_iter().zip(parts).map(|((a, b), p)| (a, b, p.to_string())).collect())
     }
     /// `size_percent` made finite and usable: 1–100% (untrusted input).
     pub fn safe_size_percent(&self) -> f64 {

@@ -666,3 +666,21 @@ fn auto_alignment_saves_readable_by_older_builds() {
     // Files from before the flag keep their alignment.
     assert_eq!(serde_json::from_str::<ParaStyle>(r#"{"justify":"Center"}"#).unwrap().justify, Justify::Center);
 }
+
+/// Mono ruby (JLREQ 3.3) is saved only when mono, and splits its reading into one part per base
+/// character (a voicing mark staying with its character); a reading with another number of parts,
+/// and group ruby, give no parts.
+#[test]
+fn mono_ruby_splits_its_reading_per_base_character() {
+    let mut r = RubySpan::new(0, 6, "かん　じ");
+    assert!(serde_json::to_value(&r).unwrap().get("kind").is_none());
+    assert_eq!(r.mono_parts("漢字"), None, "group ruby");
+    r.kind = RubyKind::Mono;
+    let saved = serde_json::to_value(&r).unwrap();
+    assert_eq!(saved["kind"], "mono");
+    assert_eq!(serde_json::from_value::<RubySpan>(saved).unwrap(), r);
+    assert_eq!(r.mono_parts("漢字"), Some(vec![(0, 3, "かん".to_string()), (3, 6, "じ".to_string())]));
+    assert_eq!(r.mono_parts("漢字字"), None, "two parts, three characters");
+    let marked = RubySpan { kind: RubyKind::Mono, ..RubySpan::new(0, 9, "a b") };
+    assert_eq!(marked.mono_parts("か\u{3099}x"), Some(vec![(0, 6, "a".to_string()), (6, 7, "b".to_string())]));
+}

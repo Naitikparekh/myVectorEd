@@ -250,3 +250,28 @@ fn ruby_ranges_follow_edits_of_the_text() {
     t.normalize_ruby();
     assert!(t.ruby.is_empty());
 }
+
+/// Mono ruby (W3C JLREQ 3.3): each base character's part of the reading is set over that character
+/// alone, exactly as two group readings would be, horizontal and vertical; a reading whose parts
+/// don't match the base characters is set as group ruby over the whole base, without its spaces.
+#[test]
+fn mono_ruby_sets_each_part_over_its_own_character() {
+    use vectorcraft_doc::RubyKind;
+    let placed = |lay: &TextLayout| lay.ruby.iter().map(|g| (g.gid, g.origin, g.line)).collect::<Vec<_>>();
+    for vertical in [false, true] {
+        let with = |ruby: Vec<RubySpan>| {
+            let mut t = TextObject::point(Point::ZERO, "漢字です", style(20.0));
+            t.vertical = vertical;
+            t.ruby = ruby;
+            layout(db(), &t)
+        };
+        let mono = with(vec![RubySpan { kind: RubyKind::Mono, ..RubySpan::new(0, 6, "かん　じ") }]);
+        let groups = with(vec![RubySpan::new(0, 3, "かん"), RubySpan::new(3, 6, "じ")]);
+        assert_eq!(mono.ruby.len(), 3);
+        assert_eq!(placed(&mono), placed(&groups), "vertical {vertical}");
+        let whole = with(vec![RubySpan::new(0, 6, "かんじ")]);
+        assert_ne!(placed(&mono), placed(&whole), "vertical {vertical}: not one group reading");
+        let mismatched = with(vec![RubySpan { kind: RubyKind::Mono, ..RubySpan::new(0, 6, "か ん じ") }]);
+        assert_eq!(placed(&mismatched), placed(&whole), "vertical {vertical}: three parts over two characters");
+    }
+}
