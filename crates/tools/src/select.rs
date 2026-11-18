@@ -988,13 +988,20 @@ impl Tool for SelectionTool {
                     self.state = State::Moving { start: p, press: p, hold: center, by_anchor: false, began: false, deselect, key, exclude: None };
                     return vec![];
                 }
-                // 3. Objects: Cmd/Ctrl-click selects the one under the selected one (cycling).
+                // 3. Objects: Cmd/Ctrl-click selects the one under the selected one (cycling);
+                // with Shift too it adds that one to the selection, or takes it out when it is
+                // already selected ("Add to selection or subtract from selection behind an
+                // object", the public keyboard shortcuts page:
+                // <http://web.archive.org/web/2021/https://helpx.adobe.com/illustrator/using/default-keyboard-shortcuts.html>).
                 if m.cmd
                     && cx.select_behind
                     && let Some(behind) = object_behind(cx, p)
                 {
                     self.state =
                         State::Moving { start: p, press: p, hold: p, by_anchor: false, began: false, deselect: None, key: None, exclude: None };
+                    if m.shift {
+                        return vec![Action::Exec("select.toggle".into(), json!({ "id": behind.0 }))];
+                    }
                     return vec![Action::Exec("select.set".into(), json!({ "ids": [behind.0] }))];
                 }
                 let (hit, scope) = match selected_source_hit(cx, p) {

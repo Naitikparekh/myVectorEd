@@ -182,6 +182,52 @@ fn a_custom_kinsoku_set_is_set_per_paragraph_saved_and_breaks_lines() {
     assert!(text(&s).para_at(0).kinsoku_set.is_some());
 }
 
+/// `text.setFormat {mojikumi: {name, …}}` gives the paragraphs a custom Mojikumi set, saved with
+/// them and spacing their type: a `latinSpace` of 50% puts half an em between 雅 and A. A predefined
+/// set replaces it; a set without a name, with an unknown key, a wrong punctuation or a space out
+/// of range fails and changes nothing; Undo restores it.
+#[test]
+fn a_custom_mojikumi_set_is_set_per_paragraph_saved_and_spaces_type() {
+    use vectorcraft_doc::{Mojikumi, MojikumiPunctuation};
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 400, "height": 400})).unwrap();
+    let id = s.execute("text.create", &json!({"x": 10, "y": 50, "text": "雅A", "size": 20})).unwrap()["id"].as_u64().unwrap();
+    s.execute("text.setFormat", &json!({"id": id, "mojikumi": "none"})).unwrap();
+    let text = |s: &Session| match &s.doc().unwrap().doc.node(NodeId(id)).unwrap().kind {
+        NodeKind::Text(t) => t.clone(),
+        _ => panic!("text"),
+    };
+    let first_advance = |s: &Session| vectorcraft_text::layout(vectorcraft_text::FontDb::global(), &text(s)).glyphs[0].advance;
+    let plain = first_advance(&s);
+    s.execute("text.setFormat", &json!({"id": id, "mojikumi": {"name": "Mine", "punctuation": "shared", "lineEndHalf": true, "latinSpace": 50}}))
+        .unwrap();
+    let p = text(&s).para_at(0).clone();
+    let set = p.mojikumi_set.clone().unwrap();
+    assert_eq!(p.mojikumi, Mojikumi::Custom);
+    assert_eq!(
+        (set.name.as_str(), set.punctuation, set.line_end_half, set.line_start_flush, set.latin_space),
+        ("Mine", MojikumiPunctuation::Shared, true, false, 0.5)
+    );
+    assert!((first_advance(&s) - plain - 10.0).abs() < 0.01, "half an em after 雅: {plain} -> {}", first_advance(&s));
+    let reopened = vectorcraft_format::load(&vectorcraft_format::save(&s.doc().unwrap().doc, false)).unwrap();
+    let Some(NodeKind::Text(back)) = reopened.node(NodeId(id)).map(|n| &n.kind) else { panic!("text") };
+    assert_eq!((back.para_at(0).mojikumi, back.para_at(0).mojikumi_set.clone()), (Mojikumi::Custom, Some(set.clone())));
+    for wrong in [
+        json!({"latinSpace": 10}),
+        json!({"name": "x", "spacing": 1}),
+        json!({"name": "x", "punctuation": "quarter"}),
+        json!({"name": "x", "latinSpace": 51}),
+        json!({"name": "x", "lineEndDot": "yes"}),
+    ] {
+        assert!(s.execute("text.setFormat", &json!({"id": id, "mojikumi": wrong})).is_err(), "{wrong}");
+    }
+    assert_eq!(text(&s).para_at(0).mojikumi_set, Some(set), "a failed call changes nothing");
+    s.execute("text.setFormat", &json!({"id": id, "mojikumi": "yakumonoHankaku"})).unwrap();
+    assert_eq!((text(&s).para_at(0).mojikumi, text(&s).para_at(0).mojikumi_set.is_none()), (Mojikumi::YakumonoHankaku, true));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(text(&s).para_at(0).mojikumi, Mojikumi::Custom);
+}
+
 #[test]
 fn burasagari_is_set_per_paragraph_and_saved_only_when_on() {
     use vectorcraft_doc::Burasagari;

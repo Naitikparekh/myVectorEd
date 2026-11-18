@@ -1760,3 +1760,47 @@ fn vertical_optical_to_auto_keeps_the_fonts_pair() {
     assert_ne!(expected, positions(&unkerned), "the font's A-V pair changes vertical positions");
     assert_eq!(positions(&mixed), expected, "vertical Optical keeps the A-V font pair across the style boundary");
 }
+
+/// A custom Mojikumi set spaces type by its own switches: one made of Line-end Punctuation Half
+/// Width's switches, or of YakumonoHankaku's, lays out as that set does; its Japanese–Latin space
+/// is its own share of an em (half an em here, 10 pt at 20 pt); Custom without a set lays out as
+/// None. Horizontal and vertical. Needs a font with full-width Japanese (skipped without one).
+#[test]
+fn a_custom_mojikumi_set_spaces_by_its_own_switches() {
+    use vectorcraft_doc::{Mojikumi, MojikumiPunctuation, MojikumiSet};
+    let lay = |text: &str, m: Mojikumi, set: Option<MojikumiSet>, vertical_type: bool| {
+        let mut t = TextObject::point(Point::ZERO, text, CharStyle { size: 20.0, ..CharStyle::default() });
+        t.xf = Affine::IDENTITY;
+        t.vertical = vertical_type;
+        t.para.mojikumi = m;
+        t.para.mojikumi_set = set;
+        layout(FontDb::global(), &t)
+    };
+    if (lay("一。", Mojikumi::None, None, false).glyphs[1].advance - 20.0).abs() > 2.0 {
+        return; // no font with full-width punctuation here
+    }
+    let line_end_half = MojikumiSet {
+        name: "Like Line-end Half".into(),
+        punctuation: MojikumiPunctuation::Shared,
+        line_start_flush: true,
+        line_end_half: true,
+        line_end_dot: false,
+        latin_space: 0.25,
+    };
+    let hankaku =
+        MojikumiSet { name: "Like YakumonoHankaku".into(), punctuation: MojikumiPunctuation::Half, latin_space: 0.25, ..Default::default() };
+    let wide = MojikumiSet { name: "Wide".into(), latin_space: 0.5, ..Default::default() };
+    for vertical_type in [false, true] {
+        let adv = |text: &str, m, set: Option<&MojikumiSet>| {
+            lay(text, m, set.cloned(), vertical_type).glyphs.iter().map(|g| (g.advance * 100.0).round() / 100.0).collect::<Vec<_>>()
+        };
+        for text in ["「一」「二」、三。", "雅楽2026年・A。"] {
+            assert_eq!(adv(text, Mojikumi::Custom, Some(&line_end_half)), adv(text, Mojikumi::LineEndHalf, None), "{text}");
+            assert_eq!(adv(text, Mojikumi::Custom, Some(&hankaku)), adv(text, Mojikumi::YakumonoHankaku, None), "{text}");
+            assert_eq!(adv(text, Mojikumi::Custom, None), adv(text, Mojikumi::None, None), "{text}");
+        }
+        let extra: Vec<f64> =
+            adv("雅A雅", Mojikumi::Custom, Some(&wide)).iter().zip(adv("雅A雅", Mojikumi::None, None)).map(|(a, b)| a - b).collect();
+        assert_eq!(extra.iter().map(|x| x.round()).collect::<Vec<_>>(), [10.0, 10.0, 0.0], "vertical {vertical_type}");
+    }
+}

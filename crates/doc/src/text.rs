@@ -27,7 +27,8 @@ pub use composite::{
 };
 pub use para_style::{
     Burasagari, Composer, FirstBaseline, HyphenationOptions, JustificationOptions, Justify, KINSOKU_SET_MAX_CHARS, Kashida, Kinsoku, KinsokuSet,
-    KinsokuShoriType, LeadingModel, Mojikumi, ParaDirection, ParaStyle, SingleWordJustify,
+    KinsokuShoriType, LeadingModel, MOJIKUMI_LATIN_SPACE_MAX, Mojikumi, MojikumiPunctuation, MojikumiSet, ParaDirection, ParaStyle,
+    SingleWordJustify,
 };
 pub use runs::PATH_LEAD_MAX;
 pub use runs::{INLINE_CHAR, INLINE_MAX_SCALE, InlineArt, RubyAlign, RubyPosition, RubySpan, TextKind, TextRun, TextStyleDef, TypeAntiAlias};

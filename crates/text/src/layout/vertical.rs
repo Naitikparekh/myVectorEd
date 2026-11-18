@@ -144,7 +144,7 @@ pub(super) fn dot_quarter(g: &SGlyph) -> Option<f64> {
 /// Line-end Punctuation Half Width follow VectorCraft's own spacing rules, built on the help
 /// page's one-line description of each set
 /// (<https://helpx.adobe.com/illustrator/desktop/design-with-text/edit-format-text/use-mojikumi-for-japanese-text-composition.html>).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct MojikumiRules {
     /// Consecutive punctuation shares one half-em space ([`compress_punctuation`]).
     pub share: bool,
@@ -157,20 +157,43 @@ pub(super) struct MojikumiRules {
     pub half_end: bool,
     /// A middle dot ending a line loses the quarter em after it.
     pub dot_end: bool,
-    /// A quarter em between Japanese and Latin letters or digits ([`space_japanese_and_latin`]),
-    /// taken off again at a line's end.
-    pub wakan: bool,
+    /// The space between Japanese and Latin letters or digits, in ems
+    /// ([`space_japanese_and_latin`]): a quarter em in the predefined sets that add it, 0 for
+    /// none; taken off again at a line's end.
+    pub wakan: f64,
 }
 
 impl MojikumiRules {
     pub(super) fn of(set: Mojikumi) -> Self {
         let none = Self::default();
+        let wakan = WAKAN_AKI;
         match set {
-            Mojikumi::None | Mojikumi::YakumonoZenkaku => none,
-            Mojikumi::LineEndHalf => Self { share: true, flush_start: true, half_end: true, wakan: true, ..none },
-            Mojikumi::YakumonoHankaku => Self { half: true, wakan: true, ..none },
-            Mojikumi::GyomatsuYakumonoHankaku => Self { flush_start: true, half_end: true, dot_end: true, wakan: true, ..none },
-            Mojikumi::GyomatsuYakumonoZenkaku => Self { wakan: true, ..none },
+            // Custom without a set of its own spaces nothing ([`Self::for_para`] reads the set).
+            Mojikumi::None | Mojikumi::YakumonoZenkaku | Mojikumi::Custom => none,
+            Mojikumi::LineEndHalf => Self { share: true, flush_start: true, half_end: true, wakan, ..none },
+            Mojikumi::YakumonoHankaku => Self { half: true, wakan, ..none },
+            Mojikumi::GyomatsuYakumonoHankaku => Self { flush_start: true, half_end: true, dot_end: true, wakan, ..none },
+            Mojikumi::GyomatsuYakumonoZenkaku => Self { wakan, ..none },
+        }
+    }
+
+    /// The rules of paragraph `para`: its predefined set's, or with [`Mojikumi::Custom`] its custom
+    /// set's ([`vectorcraft_doc::ParaStyle::mojikumi_set`]).
+    pub(super) fn for_para(para: &vectorcraft_doc::ParaStyle) -> Self {
+        use vectorcraft_doc::MojikumiPunctuation;
+        match (&para.mojikumi, &para.mojikumi_set) {
+            (Mojikumi::Custom, Some(set)) => {
+                let space = set.latin_space;
+                Self {
+                    share: set.punctuation == MojikumiPunctuation::Shared,
+                    half: set.punctuation == MojikumiPunctuation::Half,
+                    flush_start: set.line_start_flush,
+                    half_end: set.line_end_half,
+                    dot_end: set.line_end_dot,
+                    wakan: if space.is_finite() { space.clamp(0.0, vectorcraft_doc::MOJIKUMI_LATIN_SPACE_MAX) } else { 0.0 },
+                }
+            }
+            (m, _) => Self::of(*m),
         }
     }
 
@@ -182,7 +205,7 @@ impl MojikumiRules {
 
     /// Whether a line ending at some character can be set narrower than its characters' advances.
     pub(super) fn trims_line_end(&self) -> bool {
-        self.half_end || self.dot_end || self.wakan
+        self.half_end || self.dot_end || self.wakan > 0.0
     }
 }
 
@@ -271,10 +294,11 @@ fn is_latin_letter(c: char) -> bool {
     c.is_alphanumeric() && !is_cjk(c)
 }
 
-/// Mojikumi (JLREQ 3.2.2): a quarter em between a Japanese character and a Latin letter or digit,
-/// either way round, added after the first of the two. Returns what each glyph got after it (taken
+/// Mojikumi (JLREQ 3.2.2): `em_share` of an em (a quarter in the predefined sets) between a
+/// Japanese character and a Latin letter or digit, either way round, added after the first of the
+/// two. Returns what each glyph got after it (taken
 /// off again when the line ends there).
-pub(super) fn space_japanese_and_latin(sg: &mut [SGlyph]) -> Vec<f64> {
+pub(super) fn space_japanese_and_latin(sg: &mut [SGlyph], em_share: f64) -> Vec<f64> {
     let mut added = vec![0.0; sg.len()];
     for j in 1..sg.len() {
         let (before, after) = sg.split_at_mut(j);
@@ -290,7 +314,7 @@ pub(super) fn space_japanese_and_latin(sg: &mut [SGlyph]) -> Vec<f64> {
             None
         };
         if let Some(g) = japanese {
-            let aki = WAKAN_AKI * g.face.units_per_em() * g.sx;
+            let aki = em_share * g.face.units_per_em() * g.sx;
             a.adv += aki;
             if let Some(x) = added.get_mut(j - 1) {
                 *x = aki;
