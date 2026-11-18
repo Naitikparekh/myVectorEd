@@ -1352,6 +1352,18 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "{} open Hyphenation (the Paragraph panel menu's Hyphenation…) on the paragraphs the Paragraph panel acts on, filled in with the values it shows (dialog `hyphenation`: hyphenate, wordsLongerThan 1..25, afterFirst 1..15, beforeLast 1..15, hyphenLimit 0..25 (0: no limit), hyphenationZone (pt), hyphenateCapitalized): OK runs text.setFormat with the values that changed, as one undo step; an error with no type selected",
     ),
     (
+        "ui.kinsokuSettings",
+        "Kinsoku Shori Settings…",
+        "",
+        "{} open Kinsoku Shori Settings (the Paragraph panel menu's Kinsoku Shori Settings…, with Show East Asian Options) on the paragraphs the Paragraph panel acts on, filled in with the custom kinsoku set they share or their predefined set's lists (Hard when none), named Custom (dialog `kinsokuSettings`: name, noStart, noEnd, hanging, inseparable): OK runs text.setFormat {kinsoku: {…}} on them as one undo step, white space in the lists left out; an error with no type selected or an empty name",
+    ),
+    (
+        "ui.mojikumiSettings",
+        "Mojikumi Settings…",
+        "",
+        "{} open Mojikumi Settings (the Paragraph panel menu's Mojikumi Settings…, with Show East Asian Options) on the paragraphs the Paragraph panel acts on, filled in with the custom Mojikumi set they share or Line-end Punctuation Half Width's switches, named Custom (dialog `mojikumiSettings`: name, punctuation (full|shared|half), lineStartFlush, lineEndHalf, lineEndDot, latinSpace (% of an em 0..50)): OK runs text.setFormat {mojikumi: {…}} on them as one undo step; an error with no type selected, an empty name or a space out of range",
+    ),
+    (
         "ui.tateChuYokoSettings",
         "Tate-chu-yoko Settings…",
         "",
