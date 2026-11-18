@@ -92,7 +92,7 @@ pages describe it.
   recorded and their assets are selected again.
 - The Lighting tab also holds the Shadows switch and its settings ([Shadows](#shadows)). The Materials tab holds
   the Graphics ([Graphics](#graphics)); base materials are set through `material` and `sideMaterial`
-  ([Materials](#materials)); ray-traced rendering is not built (see below). The
+  ([Materials](#materials)) and ray tracing through `render` ([Ray tracing](#ray-tracing)). The
   rotation and light rings on the artboard are part of the options dialog only. The panel's Lighting tab has the
   lighting widget instead ([Lighting widget](#lighting-widget)).
 
@@ -490,6 +490,31 @@ are not used while a material is set. Revolve and the 3D (Classic) effects do no
 of range, unknown keys and materials on other effects are rejected before editing; an invalid material in a loaded
 file is left out.
 
+## Ray tracing
+
+The public [Render 3D vector artwork](https://helpx.adobe.com/illustrator/desktop/special-effects-styles/create-3d-graphics/render-3d-vector-artwork.html)
+page describes turning on Ray Tracing and choosing its Quality. Extrude & Bevel, Inflate and Rotate take them in
+`render`: `rayTracing` (true or false, default false) and `quality` (`low`, `medium` the default, or `high`).
+Ray traced, the effect draws one image of its solids in place of the shaded vector faces (VectorCraft's own
+renderer):
+
+- Every sample takes the nearest face by its depth there, so faces that cross or interlock are seen exactly,
+  where the vector faces are sorted whole. Extrude & Bevel keeps its faces turned away from the viewer for this,
+  so they hide nothing but can cast shadows.
+- Each sample is lit as the faces are ([Materials](#materials), [Lighting](#lighting)): without a material,
+  colored Inflate keeps its smooth light ramps and other faces their flat shading; with one, the material shades
+  it. A ray toward each light finds whether another face blocks it, so the solids shadow themselves and each
+  other; a light's Softness spreads its rays over a cone up to 0.35 rad wide, so its shadow is soft. Only direct
+  light is traced: faces do not reflect onto each other.
+- Low takes 1 pixel a point and one sample a pixel; Medium 2 pixels a point and 2 × 2 samples; High 3 pixels a
+  point and 3 × 3 samples, and soft lights take 4 or 9 rays. The image holds at most 4,000,000 pixels (fewer a
+  point past that), the solids at most 65,536 faces (past it the vector faces are drawn), and the shadow rays a
+  budget of facet tests past which the image has no cast shadows. These values are our own.
+- A solid in a solid color takes its color, in a gradient the gradient's middle color; a pattern's solid is left
+  out. Each solid's opacity applies to its pixels; blending modes do not. The shadow behind or below the object
+  ([Shadows](#shadows)) stays a vector shape under the image. Wireframe mode wins over ray tracing. Revolve
+  takes the settings in `render` but is not ray traced.
+
 ## Graphics
 
 The public [Map artworks on 3D object](https://helpx.adobe.com/illustrator/desktop/special-effects-styles/create-3d-graphics/map-artwork-on-3d-objects.html)
@@ -584,8 +609,8 @@ with `symbol` (the name of a document symbol), `face` (`front` or `back`, defaul
 `threeD.revolve` take `front` only), `x` and `y` (points, default 0), `scale` (1..10000%, default 100) and `rotation` (-360..360 degrees,
 default 0). Other keys, values out of range and graphics on the other 3D effects are rejected before editing.
 All four take `render` ([3D and Materials panel](#3d-and-materials-panel)): an object whose `mode` is `shaded` (the
-default) or `wireframe`. A `render` that is not an object, a key other than `mode`, another mode, and `render` on
-the 3D (Classic) effects are rejected before editing.
+default) or `wireframe`, with `rayTracing` and `quality` ([Ray tracing](#ray-tracing)). A `render` that is not an
+object, another key, another mode or quality, and `render` on the 3D (Classic) effects are rejected before editing.
 
 ## What differs from the public documentation
 
@@ -596,7 +621,8 @@ out, perspective). No Adobe software, assets, presets or bevel shapes were used.
 
 - **Materials**: base materials (Roughness, Metallic, base color) are built ([Materials](#materials)); Adobe
   Substance materials, the panel's material thumbnails, graphics on Inflate and on Extrude & Bevel's walls and bevels,
-  shadows of lights after the first, and **ray-traced rendering** are not built: shading uses directional
+  shadows of lights after the first, and ray tracing of Revolve are not built (ray tracing of the other three is
+  [built](#ray-tracing)): vector shading uses directional
   lights, in the paint of the fill or stroke the solid is built for ([Fills and strokes](#fills-and-strokes)), and
   only the first light casts a shadow ([Shadows](#shadows)). Graphics map onto planar faces and Revolve's side only
   ([Graphics](#graphics)).
@@ -655,6 +681,7 @@ Release measurements and a repeatable CLI scene are in [3D lighting performance]
 
 | Date | Change |
 |---|---|
+| 2026-11-18 | Ray tracing: `render.rayTracing` and `render.quality` draw Extrude & Bevel, Inflate and Rotate as one traced image, with per-sample depth (exact visibility), per-sample materials and soft shadows the solids cast on themselves and each other ([Ray tracing](#ray-tracing)). |
 | 2026-11-18 | Base materials: `material` and `sideMaterial` on Extrude & Bevel, Inflate and Rotate, with Roughness, Metallic, a base color and six original presets; a Blinn–Phong highlight whose size follows Roughness and whose tint follows Metallic ([Materials](#materials)). |
 | 2026-11-13 | Extrude & Bevel cuts its walls into slices only for a twist. A taper alone keeps each wall flat, so it is one face, without the light ticks at the joints between slices or the light line down a wall (#7019). Inflate still slices its sides for a taper. |
 | 2026-11-12 | The seams of Extrude & Bevel, Inflate and Rotate under a white light, and of the faces of Extrude & Bevel (Classic), Revolve (Classic) and Rotate (Classic), went from miter to round joins (the seams of Revolve and of colored lights, and 3D (Classic) Wireframe edges, were already round): no thorns on edge-on facets, and facets with no neighbor now have rounded convex corners ([Seams](#seams)). |

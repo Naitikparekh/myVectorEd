@@ -38,6 +38,8 @@ pub(crate) mod material;
 pub(crate) mod shadow;
 
 pub(crate) mod wireframe;
+
+pub(crate) mod traced;
 pub use wireframe::{RENDER, RENDER_MODES, renders_wireframe, three_d_wireframe_in};
 
 pub const EXTRUDE: &str = "threeD.extrude";
@@ -1515,6 +1517,15 @@ fn art_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile]) ->
         return Some((vec![], wireframe::wire_surfaces(n.id, fx, shapes)?));
     }
     let p = crate::merged_params(&fx.id, &fx.params);
+    // Ray traced, the effect draws one traced image of its solids over the shadow it casts; when
+    // there is nothing to trace (or too much) it draws its vector faces.
+    if traced::ray_traced(&fx.id, &p).is_some()
+        && let Some(art) = traced::traced_surfaces(n.id, fx, shapes)
+    {
+        let shadow = cast_shadow(&fx.id, &p, shapes).ok()?;
+        let shadow = shadow.map_or_else(Vec::new, |(caster, settings, cast)| shadow::scoped_art(n.id, &caster, settings, cast, has_masks(shapes)));
+        return Some((shadow, art));
+    }
     let cast = casts_shadow(&fx.id, &p);
     let (art, built) = surfaces_for(doc, n, fx, shapes, cast)?;
     // A shadow past the limits draws the source path, as a solid past them does; commands report

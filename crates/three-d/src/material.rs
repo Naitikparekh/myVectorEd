@@ -59,6 +59,13 @@ impl Material {
     /// highlight where the face mirrors it toward the eye, `(1 - roughness)²` strong at its peak:
     /// white (at half strength) on a dielectric, the base color on a metal.
     pub fn shade(self, view: &View, normal: [f64; 3], color: [f64; 3]) -> [f64; 3] {
+        self.shade_lit(view, normal, color, &[])
+    }
+
+    /// [`Material::shade`] with each light's diffuse light and highlight scaled by its entry in
+    /// `visibility` (0 in full shadow, 1 unshadowed; a light without an entry is unshadowed), as
+    /// the ray-traced render finds them ([`crate::trace`]).
+    pub fn shade_lit(self, view: &View, normal: [f64; 3], color: [f64; 3], visibility: &[f64]) -> [f64; 3] {
         let m = self.sanitized();
         let base = m.base.unwrap_or(color).map(|c| unit(c, 0.0));
         if !view.shade {
@@ -70,12 +77,13 @@ impl Material {
         let tint = base.map(|c| 0.5 * (1.0 - m.metallic) + c * m.metallic);
         let mut light = [unit(view.ambient / 2.0, 0.125) * 2.0; 3];
         let mut highlight = [0.0; 3];
-        for l in view.light_list() {
-            let direct = l.direct(n) * diffuse_share;
+        for (k, l) in view.light_list().into_iter().enumerate() {
+            let seen = visibility.get(k).map_or(1.0, |v| unit(*v, 1.0));
+            let direct = l.direct(n) * diffuse_share * seen;
             let [x, y, z] = l.direction();
             let reach = n.dot(crate::V3(x, y, z));
             let half = crate::V3(x, y, z + 1.0).unit();
-            let peak = if reach > 0.0 && gloss > 0.0 { l.intensity * gloss * n.dot(half).max(0.0).powf(shininess) } else { 0.0 };
+            let peak = if reach > 0.0 && gloss > 0.0 { seen * l.intensity * gloss * n.dot(half).max(0.0).powf(shininess) } else { 0.0 };
             for c in 0..3 {
                 light[c] += direct * l.color[c];
                 highlight[c] += peak * l.color[c] * tint[c];
