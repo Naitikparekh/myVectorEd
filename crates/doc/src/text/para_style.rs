@@ -249,6 +249,9 @@ pub struct ParaStyle {
     /// with the Type tools and `text.create` takes [`Mojikumi::LineEndHalf`]; documents from before
     /// it and imported text (already set) keep [`Mojikumi::None`].
     pub mojikumi: Mojikumi,
+    /// The custom Mojikumi set the paragraph's punctuation is spaced by while [`Self::mojikumi`]
+    /// is [`Mojikumi::Custom`]; None otherwise.
+    pub mojikumi_set: Option<MojikumiSet>,
     /// Paragraph direction (Paragraph panel): the base direction of each paragraph for
     /// bidirectional text (UAX #9). None: from each paragraph's first strong character (Hebrew or
     /// Arabic: right to left).
@@ -264,6 +267,11 @@ pub struct ParaStyle {
     /// Kinsoku (Paragraph panel › Kinsoku Set): which Japanese characters may not start or end a
     /// line.
     pub kinsoku: Kinsoku,
+    /// A custom kinsoku set (Paragraph panel › Kinsoku Set) the paragraph breaks by instead of
+    /// [`Self::kinsoku`]; None for the predefined sets. `text.setFormat` sets [`Self::kinsoku`] to
+    /// [`Kinsoku::Hard`] with it, so the options that need kinsoku on (Kinsoku Shori Type,
+    /// Bunri-Kinshi) take effect.
+    pub kinsoku_set: Option<KinsokuSet>,
     /// Kinsoku Shori Type (Paragraph panel menu): how a line keeps those characters off its start
     /// and end, by pushing them in onto the line or out to the next one. No effect without kinsoku.
     pub kinsoku_type: KinsokuShoriType,
@@ -366,6 +374,8 @@ struct ParaStyleFile {
     #[serde(default, skip_serializing_if = "Mojikumi::is_none")]
     mojikumi: Mojikumi,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    mojikumi_set: Option<MojikumiSet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     direction: Option<ParaDirection>,
     #[serde(default, skip_serializing_if = "crate::skip::is_default")]
     leading_model: LeadingModel,
@@ -373,6 +383,8 @@ struct ParaStyleFile {
     burasagari: Burasagari,
     #[serde(default, skip_serializing_if = "crate::skip::is_default")]
     kinsoku: Kinsoku,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kinsoku_set: Option<KinsokuSet>,
     #[serde(default, skip_serializing_if = "crate::skip::is_default")]
     kinsoku_type: KinsokuShoriType,
     #[serde(default, skip_serializing_if = "crate::skip::is_default")]
@@ -411,10 +423,12 @@ impl From<ParaStyle> for ParaStyleFile {
             list,
             style_name,
             mojikumi,
+            mojikumi_set,
             direction,
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set,
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -439,10 +453,12 @@ impl From<ParaStyle> for ParaStyleFile {
             list,
             style_name,
             mojikumi,
+            mojikumi_set,
             direction,
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set,
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -471,10 +487,12 @@ impl From<ParaStyleFile> for ParaStyle {
             list,
             style_name,
             mojikumi,
+            mojikumi_set,
             direction,
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set,
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -498,10 +516,12 @@ impl From<ParaStyleFile> for ParaStyle {
             list,
             style_name,
             mojikumi,
+            mojikumi_set: mojikumi_set.map(|m| m.bounded()),
             direction,
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set: kinsoku_set.map(|k| k.bounded()),
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -562,6 +582,58 @@ pub enum Mojikumi {
     /// YakumonoZenkaku: punctuation keeps its full width, with no added space between Japanese and
     /// Latin text.
     YakumonoZenkaku,
+    /// A custom set: the paragraph's [`ParaStyle::mojikumi_set`] says how its punctuation is
+    /// spaced (as None when it has none).
+    Custom,
+}
+
+/// How a custom Mojikumi set spaces full-width punctuation along the line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MojikumiPunctuation {
+    /// Every mark keeps its full width (half a glyph and half a space).
+    #[default]
+    Full,
+    /// Consecutive punctuation shares one half-em space (JLREQ 3.1.4).
+    Shared,
+    /// Every opening and closing bracket, comma and full stop is set half width, and a middle dot
+    /// loses a quarter em on each side.
+    Half,
+}
+
+/// The most a custom Mojikumi set's Japanese–Latin space can be: half an em.
+pub const MOJIKUMI_LATIN_SPACE_MAX: f64 = 0.5;
+
+/// A custom Mojikumi set (Type › Mojikumi Settings…): how the paragraphs that use it space their
+/// Japanese punctuation and the space between Japanese and Latin text, on the rules W3C JLREQ
+/// describes for them (https://www.w3.org/TR/jlreq/#positioning_of_punctuation_marks and
+/// https://www.w3.org/TR/jlreq/#spacing_between_japanese_and_western_characters). Its switches are
+/// the ones the predefined sets are made of ([`Mojikumi`]).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MojikumiSet {
+    /// The set's name, as the Mojikumi Set menu lists it.
+    pub name: String,
+    /// How punctuation along the line is spaced.
+    pub punctuation: MojikumiPunctuation,
+    /// An opening bracket starting a line is set flush with the line's start.
+    pub line_start_flush: bool,
+    /// A closing bracket, comma or full stop ending a line is set half width.
+    pub line_end_half: bool,
+    /// A middle dot ending a line loses the quarter em after it.
+    pub line_end_dot: bool,
+    /// The space between a Japanese character and a Latin letter or digit, in ems (0 to
+    /// [`MOJIKUMI_LATIN_SPACE_MAX`]); taken off again at a line's end.
+    pub latin_space: f64,
+}
+
+impl MojikumiSet {
+    /// The set with its name cut to 256 characters (control characters left out) and its
+    /// Japanese–Latin space kept to 0 to [`MOJIKUMI_LATIN_SPACE_MAX`] ems (not a number: 0).
+    pub fn bounded(&self) -> Self {
+        let space = if self.latin_space.is_nan() { 0.0 } else { self.latin_space.clamp(0.0, MOJIKUMI_LATIN_SPACE_MAX) };
+        Self { name: self.name.chars().filter(|c| !c.is_control()).take(256).collect(), latin_space: space, ..self.clone() }
+    }
 }
 
 impl Mojikumi {
@@ -583,6 +655,50 @@ pub enum Kinsoku {
     /// As Hard, except that 々, the prolonged sound mark ー and small kana may start a line
     /// (JLREQ's level 3 line-breaking rules, Appendix C.3).
     Soft,
+}
+
+/// The most characters each list of a [`KinsokuSet`] keeps: lists read from a file or a command are
+/// cut to it, so a hostile list cannot make every line break test slow.
+pub const KINSOKU_SET_MAX_CHARS: usize = 1024;
+
+/// A custom kinsoku set (Type › Kinsoku Shori Settings…): the characters that may not start a line,
+/// that may not end one, that may hang outside the line (burasagari) and that may not be separated
+/// from one another, each a string of characters. The classes follow W3C JLREQ's line-adjustment
+/// classes (https://www.w3.org/TR/jlreq/#line_breaking_rules): cl-02, cl-04 to cl-07 and cl-09 to
+/// cl-11 may not start a line, cl-01 may not end one, cl-06 and cl-07 may hang, and cl-08 holds the
+/// inseparable characters. A paragraph with a set ([`ParaStyle::kinsoku_set`]) breaks by it instead
+/// of by [`Kinsoku`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KinsokuSet {
+    /// The set's name, as the Kinsoku Set menu lists it.
+    pub name: String,
+    /// Characters that may not start a line.
+    pub no_start: String,
+    /// Characters that may not end a line.
+    pub no_end: String,
+    /// Characters that may hang outside the line (Burasagari).
+    pub hanging: String,
+    /// Characters a line may not break between: two of them in a row stay on one line.
+    pub inseparable: String,
+}
+
+impl KinsokuSet {
+    /// The set with each list cut to [`KINSOKU_SET_MAX_CHARS`] characters, duplicates and control
+    /// characters left out, and the name cut to 256 characters.
+    pub fn bounded(&self) -> Self {
+        let list = |s: &str| {
+            let mut seen = std::collections::HashSet::new();
+            s.chars().filter(|c| !c.is_control() && seen.insert(*c)).take(KINSOKU_SET_MAX_CHARS).collect::<String>()
+        };
+        Self {
+            name: self.name.chars().filter(|c| !c.is_control()).take(256).collect(),
+            no_start: list(&self.no_start),
+            no_end: list(&self.no_end),
+            hanging: list(&self.hanging),
+            inseparable: list(&self.inseparable),
+        }
+    }
 }
 
 /// How a line keeps the characters [`Kinsoku`] rules out of its start and end (Kinsoku Shori

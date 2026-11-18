@@ -1717,6 +1717,12 @@ pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
         {
             app.status(e);
         }
+        // Ruby…: a reading (furigana) over the selected characters.
+        if menu_item(ui, tl!("Ruby…"), has, false)
+            && let Err(e) = app.run("ui.ruby", json!({}))
+        {
+            app.status(e);
+        }
         // Warichu: the selected characters set smaller and stacked on lines inside their line.
         // Checked when every selected character has it; a mixed selection turns it on.
         let warichu = shared(app, |s| s.warichu) == Some(true);

@@ -99,6 +99,10 @@ pub(crate) struct SGlyph {
     /// No Break (Character panel menu): keep this glyph on the same line as the neighbouring
     /// glyphs that have it.
     pub no_break: bool,
+    /// In a paragraph with a custom kinsoku set ([`vectorcraft_doc::ParaStyle::kinsoku_set`]),
+    /// what the set says of the glyph's character ([`mark_custom_kinsoku`]); None otherwise, when
+    /// the predefined sets decide.
+    pub custom_kinsoku: Option<CustomKinsoku>,
     /// Standard Vertical Roman Alignment (Character panel menu): in vertical type this glyph
     /// stands upright when it would otherwise lie on its side ([`crate::layout`]).
     pub vertical_roman: bool,
@@ -268,6 +272,73 @@ pub(crate) fn hyphen_glyph(g: &SGlyph) -> SGlyph {
     h.proportional = false;
     h.vpal = None;
     h
+}
+
+/// What a custom kinsoku set says of one character.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CustomKinsoku {
+    /// It may not start a line.
+    pub no_start: bool,
+    /// It may not end a line.
+    pub no_end: bool,
+    /// It may hang outside the line (Burasagari).
+    pub hangs: bool,
+}
+
+impl SGlyph {
+    /// Kinsoku keeps the glyph off a line's start: by its paragraph's custom set, or else by the
+    /// predefined Hard set ([`no_line_start`]).
+    pub fn kinsoku_no_start(&self) -> bool {
+        self.custom_kinsoku.map_or_else(|| no_line_start(self.ch), |c| c.no_start)
+    }
+    /// Kinsoku keeps the glyph off a line's end: by its paragraph's custom set, or else by the
+    /// predefined sets ([`no_line_end`]).
+    pub fn kinsoku_no_end(&self) -> bool {
+        self.custom_kinsoku.map_or_else(|| no_line_end(self.ch), |c| c.no_end)
+    }
+}
+
+/// A custom kinsoku set: give each glyph of `sg` (a paragraph's glyphs, shaped from `text`, which
+/// their bytes index) what `set` says of its character ([`SGlyph::custom_kinsoku`]). An inline
+/// graphic is in no list. With `bunri_kinshi`, a glyph whose cluster ends with a character of the
+/// set's inseparable list, right before another of them, keeps the next glyph on its line
+/// ([`SGlyph::keeps_next`]), as W3C JLREQ keeps consecutive inseparable characters (cl-08,
+/// https://www.w3.org/TR/jlreq/#cl-08) together; the predefined pairs then don't apply.
+pub(crate) fn mark_custom_kinsoku(text: &str, set: &vectorcraft_doc::KinsokuSet, bunri_kinshi: bool, sg: &mut [SGlyph]) {
+    let has = |list: &str, c: char| list.contains(c);
+    for g in sg.iter_mut() {
+        g.custom_kinsoku = Some(if g.inline.is_some() {
+            CustomKinsoku::default()
+        } else {
+            CustomKinsoku { no_start: has(&set.no_start, g.ch), no_end: has(&set.no_end, g.ch), hangs: has(&set.hanging, g.ch) }
+        });
+    }
+    if !bunri_kinshi || set.inseparable.is_empty() {
+        return;
+    }
+    for k in 1..sg.len() {
+        let (a, b) = (&sg[k - 1], &sg[k]);
+        if a.byte == b.byte || a.inline.is_some() || b.inline.is_some() || a.byte + a.len != b.byte {
+            continue;
+        }
+        let last = text.get(a.byte..b.byte).and_then(|s| s.chars().next_back()).unwrap_or(a.ch);
+        if has(&set.inseparable, last) && has(&set.inseparable, b.ch) {
+            sg[k - 1].keeps_next = true;
+        }
+    }
+}
+
+/// The characters of a predefined kinsoku set, as lists a custom set can start from (Kinsoku Shori
+/// Settings… › New): those that may not start a line, that may not end one, that may hang
+/// (Burasagari) and that may not be separated (W3C JLREQ cl-08). None has empty lists.
+pub fn kinsoku_set_lists(kinsoku: vectorcraft_doc::Kinsoku) -> [String; 4] {
+    use vectorcraft_doc::Kinsoku;
+    if kinsoku == Kinsoku::None {
+        return Default::default();
+    }
+    let scan = |f: &dyn Fn(char) -> bool| (' '..='\u{FFEF}').filter(|&c| f(c)).collect::<String>();
+    let no_start = scan(&|c| no_line_start(c) && !(kinsoku == Kinsoku::Soft && soft_line_start(c)));
+    [no_start, scan(&no_line_end), "、。，．､｡".into(), "\u{2014}\u{2026}\u{2025}\u{3033}\u{3034}\u{3035}".into()]
 }
 
 /// Kinsoku (Japanese line breaking, the strict set): a character that can't start a line —
@@ -1417,6 +1488,7 @@ fn inline_glyph(
         keeps_word: false,
         keeps_next: false,
         no_break: st.no_break,
+        custom_kinsoku: None,
         vertical_roman: false,
         cursive: false,
         hyphen_language: crate::hyphen::Language::None,
@@ -1957,6 +2029,7 @@ fn shape_segment(text: &str, context: &Range<usize>, seg: &Segment, feats: &OtFe
             keeps_word: false,
             keeps_next: false,
             no_break: gst.no_break,
+            custom_kinsoku: None,
             vertical_roman: gst.standard_vertical_roman,
             cursive,
             hyphen_language: crate::hyphen::Language::from_tag(gst.language.as_deref()),
