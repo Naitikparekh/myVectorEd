@@ -135,6 +135,53 @@ fn kinsoku_shori_type_is_set_per_paragraph_and_saved_only_when_not_push_out_only
     assert_eq!(old.kinsoku_type, KinsokuShoriType::PushOutOnly);
 }
 
+/// `text.setFormat {kinsoku: {name, noStart, …}}` gives the paragraphs a custom kinsoku set, which
+/// is saved with them and breaks their lines: with `noStart` "」" only, an 。 may start a line that
+/// the predefined Hard set keeps it off. A predefined set replaces it, and a set without a name,
+/// with an unknown key or with a list that is not a string fails and changes nothing.
+#[test]
+fn a_custom_kinsoku_set_is_set_per_paragraph_saved_and_breaks_lines() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 400, "height": 400})).unwrap();
+    // A frame three characters wide (as the installed fonts draw them); the fourth is 。.
+    let probe = s.execute("text.create", &json!({"x": 10, "y": 10, "text": "あいう", "size": 10})).unwrap()["id"].as_u64().unwrap();
+    let Some(NodeKind::Text(t)) = s.doc().unwrap().doc.node(NodeId(probe)).map(|n| n.kind.clone()) else { panic!("text") };
+    let width: f64 = vectorcraft_text::layout(vectorcraft_text::FontDb::global(), &t).glyphs.iter().map(|g| g.advance).sum();
+    let id = s
+        .execute("text.create", &json!({"x": 10, "y": 50, "text": "あいう。え", "size": 10, "area": {"width": width + 0.5, "height": 100}}))
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    s.execute("text.setFormat", &json!({"id": id, "burasagari": "none", "mojikumi": "none"})).unwrap();
+    let text = |s: &Session| match &s.doc().unwrap().doc.node(NodeId(id)).unwrap().kind {
+        NodeKind::Text(t) => t.clone(),
+        _ => panic!("text"),
+    };
+    // The bytes the first line holds.
+    let first_line = |s: &Session| {
+        let l = vectorcraft_text::layout(vectorcraft_text::FontDb::global(), &text(s));
+        l.glyphs.iter().filter(|g| g.line == 0).map(|g| g.byte + g.len).max().unwrap()
+    };
+    let hard = first_line(&s);
+    s.execute("text.setFormat", &json!({"id": id, "kinsoku": {"name": "Mine", "noStart": "」", "noEnd": "「"}})).unwrap();
+    let set = text(&s).para_at(0).kinsoku_set.clone().unwrap();
+    assert_eq!((set.name.as_str(), set.no_start.as_str(), set.no_end.as_str()), ("Mine", "」", "「"));
+    assert_eq!(text(&s).para_at(0).kinsoku, vectorcraft_doc::Kinsoku::Hard);
+    let custom = first_line(&s);
+    assert!(custom > hard, "。 may start a line with the custom set: {hard} -> {custom}");
+    let reopened = vectorcraft_format::load(&vectorcraft_format::save(&s.doc().unwrap().doc, false)).unwrap();
+    let Some(NodeKind::Text(back)) = reopened.node(NodeId(id)).map(|n| &n.kind) else { panic!("text") };
+    assert_eq!(back.para_at(0).kinsoku_set, Some(set.clone()));
+    for wrong in [json!({"noStart": "」"}), json!({"name": "x", "cannot": "」"}), json!({"name": "x", "noEnd": 3})] {
+        assert!(s.execute("text.setFormat", &json!({"id": id, "kinsoku": wrong})).is_err(), "{wrong}");
+    }
+    assert_eq!(text(&s).para_at(0).kinsoku_set, Some(set), "a failed call changes nothing");
+    s.execute("text.setFormat", &json!({"id": id, "kinsoku": "soft"})).unwrap();
+    assert_eq!((text(&s).para_at(0).kinsoku, text(&s).para_at(0).kinsoku_set.is_none()), (vectorcraft_doc::Kinsoku::Soft, true));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(text(&s).para_at(0).kinsoku_set.is_some());
+}
+
 #[test]
 fn burasagari_is_set_per_paragraph_and_saved_only_when_on() {
     use vectorcraft_doc::Burasagari;

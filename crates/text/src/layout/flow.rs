@@ -10,10 +10,10 @@ use super::vertical::{
 use super::{
     Affine, BidiInfo, Burasagari, CharStyle, Ctx, EPS, Flex, Justify, Kinsoku, KinsokuShoriType, LeadingModel, LineFit, LineInfo, ListMarker,
     ParaStyle, Params, Point, Punct, Range, SGlyph, SingleWordJustify, TextObject, apply_desired, cap_x_heights, compose, fit_line, hyphen_glyph,
-    is_cjk, is_word_space, kashida, mark_word_ends, no_line_end, no_line_start, style_metrics,
+    is_cjk, is_word_space, kashida, mark_word_ends, style_metrics,
 };
 use crate::justify::is_format_control;
-use crate::shape::{keep_inseparable_pairs, keep_korean_words, repeat_base, repeated_char, shape_range};
+use crate::shape::{keep_inseparable_pairs, keep_korean_words, mark_custom_kinsoku, repeat_base, repeated_char, shape_range};
 use std::cell::Cell;
 
 /// Does paragraph `para` push characters in (Kinsoku Shori Type Push In First or Push Out First,
@@ -57,7 +57,7 @@ fn compose_para(
     // single-line composer does).
     let may_hang = para.burasagari != Burasagari::None && sg.iter().any(hangs);
     // So is a paragraph that may push characters kinsoku keeps off a line's ends in onto a line.
-    let may_push_in = pushes_in(para) && sg.iter().any(|g| no_line_start(g.ch) || no_line_end(g.ch));
+    let may_push_in = pushes_in(para) && sg.iter().any(|g| g.kinsoku_no_start() || g.kinsoku_no_end());
     // A tab's width depends on where it falls in its line, which the composer's fixed glyph widths
     // can't follow: such a paragraph is broken line by line ([`break_line`] measures its tabs).
     // The tab of a list marker is on the first line, with the marker, and has a fixed width.
@@ -277,7 +277,10 @@ fn prepare_paragraph<'a, 'text>(
         keep_korean_words(&mut sg);
     }
     // Bunri-Kinshi keeps inseparable pairs on one line, while kinsoku is on.
-    if para.bunri_kinshi && para.kinsoku != Kinsoku::None {
+    // A custom kinsoku set gives each glyph its classes, and its own inseparable characters.
+    if let Some(set) = &para.kinsoku_set {
+        mark_custom_kinsoku(text, set, para.bunri_kinshi && para.kinsoku != Kinsoku::None, &mut sg);
+    } else if para.bunri_kinshi && para.kinsoku != Kinsoku::None {
         keep_inseparable_pairs(text, &mut sg);
     }
     // Japanese composition (the paragraph's Mojikumi set): every punctuation mark set half width,

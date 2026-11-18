@@ -666,3 +666,23 @@ fn auto_alignment_saves_readable_by_older_builds() {
     // Files from before the flag keep their alignment.
     assert_eq!(serde_json::from_str::<ParaStyle>(r#"{"justify":"Center"}"#).unwrap().justify, Justify::Center);
 }
+
+/// A custom kinsoku set is saved with its paragraph only when there is one, reads back as saved,
+/// and a set read from a file keeps at most `KINSOKU_SET_MAX_CHARS` characters per list, with
+/// duplicates and control characters left out.
+#[test]
+fn a_custom_kinsoku_set_is_saved_only_when_set_and_bounded_on_read() {
+    let plain = ParaStyle::default();
+    assert!(serde_json::to_value(&plain).unwrap().get("kinsoku_set").is_none());
+    let set = KinsokuSet { name: "Mine".into(), no_start: "」。".into(), no_end: "「".into(), hanging: "。".into(), inseparable: "—".into() };
+    let with = ParaStyle { kinsoku_set: Some(set.clone()), ..ParaStyle::default() };
+    let saved = serde_json::to_value(&with).unwrap();
+    assert_eq!(saved["kinsoku_set"]["noStart"], "」。");
+    assert_eq!(serde_json::from_value::<ParaStyle>(saved).unwrap(), with);
+    let long: String = ('\u{4E00}'..).take(KINSOKU_SET_MAX_CHARS + 10).collect();
+    let read: ParaStyle =
+        serde_json::from_value(serde_json::json!({"kinsoku_set": {"name": "x\u{0}y", "noStart": long, "noEnd": "「「\n「（"}})).unwrap();
+    let read = read.kinsoku_set.unwrap();
+    assert_eq!(read.no_start.chars().count(), KINSOKU_SET_MAX_CHARS);
+    assert_eq!((read.name.as_str(), read.no_end.as_str(), read.hanging.as_str()), ("xy", "「（", ""));
+}

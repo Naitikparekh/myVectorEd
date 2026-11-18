@@ -26,8 +26,8 @@ pub use composite::{
     CompositeClass, CompositeClasses, CompositeFont, CompositePart, CompositeParts, CustomCharSet,
 };
 pub use para_style::{
-    Burasagari, Composer, FirstBaseline, HyphenationOptions, JustificationOptions, Justify, Kashida, Kinsoku, KinsokuShoriType, LeadingModel,
-    Mojikumi, ParaDirection, ParaStyle, SingleWordJustify,
+    Burasagari, Composer, FirstBaseline, HyphenationOptions, JustificationOptions, Justify, KINSOKU_SET_MAX_CHARS, Kashida, Kinsoku, KinsokuSet,
+    KinsokuShoriType, LeadingModel, Mojikumi, ParaDirection, ParaStyle, SingleWordJustify,
 };
 pub use runs::PATH_LEAD_MAX;
 pub use runs::{INLINE_CHAR, INLINE_MAX_SCALE, InlineArt, RubyAlign, RubyPosition, RubySpan, TextKind, TextRun, TextStyleDef, TypeAntiAlias};

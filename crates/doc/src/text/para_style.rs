@@ -264,6 +264,11 @@ pub struct ParaStyle {
     /// Kinsoku (Paragraph panel › Kinsoku Set): which Japanese characters may not start or end a
     /// line.
     pub kinsoku: Kinsoku,
+    /// A custom kinsoku set (Paragraph panel › Kinsoku Set) the paragraph breaks by instead of
+    /// [`Self::kinsoku`]; None for the predefined sets. `text.setFormat` sets [`Self::kinsoku`] to
+    /// [`Kinsoku::Hard`] with it, so the options that need kinsoku on (Kinsoku Shori Type,
+    /// Bunri-Kinshi) take effect.
+    pub kinsoku_set: Option<KinsokuSet>,
     /// Kinsoku Shori Type (Paragraph panel menu): how a line keeps those characters off its start
     /// and end, by pushing them in onto the line or out to the next one. No effect without kinsoku.
     pub kinsoku_type: KinsokuShoriType,
@@ -373,6 +378,8 @@ struct ParaStyleFile {
     burasagari: Burasagari,
     #[serde(default, skip_serializing_if = "crate::skip::is_default")]
     kinsoku: Kinsoku,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kinsoku_set: Option<KinsokuSet>,
     #[serde(default, skip_serializing_if = "crate::skip::is_default")]
     kinsoku_type: KinsokuShoriType,
     #[serde(default, skip_serializing_if = "crate::skip::is_default")]
@@ -415,6 +422,7 @@ impl From<ParaStyle> for ParaStyleFile {
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set,
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -443,6 +451,7 @@ impl From<ParaStyle> for ParaStyleFile {
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set,
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -475,6 +484,7 @@ impl From<ParaStyleFile> for ParaStyle {
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set,
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -502,6 +512,7 @@ impl From<ParaStyleFile> for ParaStyle {
             leading_model,
             burasagari,
             kinsoku,
+            kinsoku_set: kinsoku_set.map(|k| k.bounded()),
             kinsoku_type,
             bunri_kinshi,
             kurikaeshi_moji_shori,
@@ -583,6 +594,50 @@ pub enum Kinsoku {
     /// As Hard, except that 々, the prolonged sound mark ー and small kana may start a line
     /// (JLREQ's level 3 line-breaking rules, Appendix C.3).
     Soft,
+}
+
+/// The most characters each list of a [`KinsokuSet`] keeps: lists read from a file or a command are
+/// cut to it, so a hostile list cannot make every line break test slow.
+pub const KINSOKU_SET_MAX_CHARS: usize = 1024;
+
+/// A custom kinsoku set (Type › Kinsoku Shori Settings…): the characters that may not start a line,
+/// that may not end one, that may hang outside the line (burasagari) and that may not be separated
+/// from one another, each a string of characters. The classes follow W3C JLREQ's line-adjustment
+/// classes (https://www.w3.org/TR/jlreq/#line_breaking_rules): cl-02, cl-04 to cl-07 and cl-09 to
+/// cl-11 may not start a line, cl-01 may not end one, cl-06 and cl-07 may hang, and cl-08 holds the
+/// inseparable characters. A paragraph with a set ([`ParaStyle::kinsoku_set`]) breaks by it instead
+/// of by [`Kinsoku`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KinsokuSet {
+    /// The set's name, as the Kinsoku Set menu lists it.
+    pub name: String,
+    /// Characters that may not start a line.
+    pub no_start: String,
+    /// Characters that may not end a line.
+    pub no_end: String,
+    /// Characters that may hang outside the line (Burasagari).
+    pub hanging: String,
+    /// Characters a line may not break between: two of them in a row stay on one line.
+    pub inseparable: String,
+}
+
+impl KinsokuSet {
+    /// The set with each list cut to [`KINSOKU_SET_MAX_CHARS`] characters, duplicates and control
+    /// characters left out, and the name cut to 256 characters.
+    pub fn bounded(&self) -> Self {
+        let list = |s: &str| {
+            let mut seen = std::collections::HashSet::new();
+            s.chars().filter(|c| !c.is_control() && seen.insert(*c)).take(KINSOKU_SET_MAX_CHARS).collect::<String>()
+        };
+        Self {
+            name: self.name.chars().filter(|c| !c.is_control()).take(256).collect(),
+            no_start: list(&self.no_start),
+            no_end: list(&self.no_end),
+            hanging: list(&self.hanging),
+            inseparable: list(&self.inseparable),
+        }
+    }
 }
 
 /// How a line keeps the characters [`Kinsoku`] rules out of its start and end (Kinsoku Shori

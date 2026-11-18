@@ -45,6 +45,7 @@ fn synthetic_glyphs(specs: &[(usize, usize, f64, char)]) -> Vec<SGlyph> {
             vpal: None,
             level: unicode_bidi::Level::ltr(),
             no_break: false,
+            custom_kinsoku: None,
             vertical_roman: false,
             cursive: false,
             hyphen_language: crate::hyphen::Language::English,
@@ -1524,4 +1525,67 @@ fn justification_adds_no_gap_inside_a_warichu_block_drawn_right_to_left() {
         assert!(flow::is_letter_gap(1, &[], (&after, &begun), 0, &glyphs, false), "{first}{second}");
         assert_eq!(flow::is_cjk_gap(1, &[], (&after, &begun), 0, &glyphs), first == '漢', "{first}{second}");
     }
+}
+
+/// A custom kinsoku set (W3C JLREQ's classes, https://www.w3.org/TR/jlreq/#line_breaking_rules):
+/// the break candidates follow its lists instead of the predefined Hard set. Here 。 may start a
+/// line and あ may not, い may not end one, and with Bunri-Kinshi the set's inseparable ＊ and ＃
+/// stay together while the predefined em-dash pair does not. Kinsoku None still turns it off. (The
+/// paragraph's end is no candidate.)
+#[test]
+fn a_custom_kinsoku_set_decides_the_breaks_by_its_lists() {
+    let set = vectorcraft_doc::KinsokuSet {
+        name: "Mine".into(),
+        no_start: "あ".into(),
+        no_end: "い".into(),
+        hanging: String::new(),
+        inseparable: "＊＃".into(),
+    };
+    let ends = |text: &str, kinsoku: Kinsoku, bunri: bool| {
+        let mut glyphs = full_width(text);
+        crate::shape::mark_custom_kinsoku(text, &set, bunri, &mut glyphs);
+        candidates(text, &glyphs, None, kinsoku).iter().map(|b| b.end).collect::<Vec<_>>()
+    };
+    let text = "う。あいえ";
+    // Hard would keep 。 off a line start (no break after う); the set lets it start one, keeps あ
+    // off a line start (no break after 。) and い off a line end (no break after い).
+    assert_eq!(candidates(text, &full_width(text), None, Kinsoku::Hard).iter().map(|b| b.end).collect::<Vec<_>>(), [2, 3, 4]);
+    assert_eq!(ends(text, Kinsoku::Hard, false), [1, 3]);
+    assert_eq!(ends(text, Kinsoku::None, false), [1, 2, 3, 4]);
+    let pairs = "う＊＃——え";
+    assert_eq!(ends(pairs, Kinsoku::Hard, false), [1, 2, 3, 4, 5]);
+    assert_eq!(ends(pairs, Kinsoku::Hard, true), [1, 3, 4, 5], "＊＃ stay together, —— is not in the set");
+}
+
+/// A custom kinsoku set's hanging list decides what Burasagari hangs: with Standard burasagari a
+/// ！ the set lists hangs outside a full line instead of going to the next one, and a 。 it does
+/// not list goes to the next line with the character before it.
+#[test]
+fn a_custom_kinsoku_sets_hanging_characters_hang() {
+    use KinsokuShoriType::PushOutOnly;
+    let set = vectorcraft_doc::KinsokuSet { name: "Mine".into(), no_start: "！。".into(), hanging: "！".into(), ..Default::default() };
+    let end = |text: &str| {
+        let mut glyphs = full_width(text);
+        crate::shape::mark_custom_kinsoku(text, &set, false, &mut glyphs);
+        break_line(text, &glyphs, 0, 30.0, &[], 0.0, None, Burasagari::Standard, Kinsoku::Hard, PushOutOnly, false, false, &[], None).0
+    };
+    assert_eq!(end("あいう！え"), 4, "！ hangs");
+    assert_eq!(end("あいう。え"), 2, "う goes to the next line with 。");
+}
+
+/// The predefined sets as lists a custom set starts from: Hard keeps ー and 」 off a line start and
+/// 「 off its end, Soft lets ー start one, and a set built from Hard's lists breaks as Hard does.
+#[test]
+fn predefined_kinsoku_sets_give_the_lists_a_custom_set_starts_from() {
+    let [no_start, no_end, hanging, inseparable] = crate::kinsoku_set_lists(Kinsoku::Hard);
+    assert!(no_start.contains('ー') && no_start.contains('」') && no_end.contains('「'));
+    assert!(hanging.contains('。') && inseparable.contains('—'));
+    assert!(!crate::kinsoku_set_lists(Kinsoku::Soft)[0].contains('ー'));
+    assert!(crate::kinsoku_set_lists(Kinsoku::None).iter().all(String::is_empty));
+    let set = vectorcraft_doc::KinsokuSet { name: "Copy".into(), no_start, no_end, hanging, inseparable };
+    let text = "あ「い」ーう。え";
+    let mut glyphs = full_width(text);
+    crate::shape::mark_custom_kinsoku(text, &set, true, &mut glyphs);
+    let ends = |g: &[SGlyph]| candidates(text, g, None, Kinsoku::Hard).iter().map(|b| b.end).collect::<Vec<_>>();
+    assert_eq!(ends(&glyphs), ends(&full_width(text)));
 }

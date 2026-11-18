@@ -675,12 +675,17 @@ pub(super) fn break_line(
     }
 }
 
-/// Can glyph `g` hang outside the line (burasagari)? An East Asian comma or full stop, full width
-/// (、。，．) or half width (､｡); not a closing bracket, nor Latin punctuation (Latin text keeps
+/// Can glyph `g` hang outside the line (burasagari)? A character its paragraph's custom kinsoku
+/// set lists as hanging, or without one an East Asian comma or full stop, full width (、。，．) or
+/// half width (､｡); not a closing bracket, nor Latin punctuation (Latin text keeps
 /// its line breaks and composer). Never an inline graphic (U+FFFC), nor a character of a
 /// tate-chu-yoko or warichu block.
 pub(super) fn hangs(g: &SGlyph) -> bool {
-    g.inline.is_none() && matches!(g.ch, '、' | '。' | '，' | '．' | '､' | '｡') && g.tcy.is_none() && g.wari.is_none()
+    let listed = match g.custom_kinsoku {
+        Some(c) => c.hangs,
+        None => matches!(g.ch, '、' | '。' | '，' | '．' | '､' | '｡'),
+    };
+    g.inline.is_none() && listed && g.tcy.is_none() && g.wari.is_none()
 }
 
 /// Optical Margin Alignment: the share of glyph `g`'s advance that hangs outside the margin when
@@ -792,7 +797,11 @@ fn splits_no_break(g: &[SGlyph], end: usize) -> bool {
 /// closing one, a comma, a full stop, a small kana… (the character is pushed to the next line
 /// with the one before it).
 fn kinsoku_allows(g: &[SGlyph], j: usize, kinsoku: Kinsoku) -> bool {
-    g.get(j).is_some_and(|gl| kinsoku_between(gl.ch, g.get(j + 1).map(|n| n.ch), kinsoku))
+    g.get(j).is_some_and(|gl| match gl.custom_kinsoku {
+        // A custom set decides by its lists, which set no Soft exceptions.
+        Some(c) => kinsoku == Kinsoku::None || (!c.no_end && g.get(j + 1).is_none_or(|n| !n.kinsoku_no_start())),
+        None => kinsoku_between(gl.ch, g.get(j + 1).map(|n| n.ch), kinsoku),
+    })
 }
 
 /// Kinsoku for a break between `before` and `after` (none: the end of the paragraph): Hard keeps
