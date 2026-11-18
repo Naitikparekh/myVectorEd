@@ -59,7 +59,8 @@ fn ruby_pieces(cx: &Ctx<'_>, t: &TextObject) -> Vec<RubyPiece> {
     by_byte.sort_by_key(|&i| byte_of(i));
     let longest = cx.out.glyphs.iter().map(|g| g.len.max(1)).max().unwrap_or(1);
     let mut pieces = Vec::new();
-    for span in &t.ruby {
+    let spans: Vec<std::borrow::Cow<'_, vectorcraft_doc::text::RubySpan>> = t.ruby.iter().flat_map(|span| per_base(span, cx.text)).collect();
+    for span in spans.iter().map(|s| &**s) {
         let (start, end) = (span.start.min(text_len), span.end.min(text_len));
         if start >= end || span.text.trim().is_empty() {
             continue;
@@ -86,6 +87,25 @@ fn ruby_pieces(cx: &Ctx<'_>, t: &TextObject) -> Vec<RubyPiece> {
         collect_ruby_pieces_for_span(cx, span, start, total, &by_line, &mut pieces);
     }
     pieces
+}
+
+/// The readings `span` sets: itself for group ruby; for mono ruby (W3C JLREQ 3.3) a group reading
+/// over each base character with its own part of the reading, or when the parts don't match the
+/// base characters, the whole reading over the whole base as group ruby, its spaces left out.
+fn per_base<'a>(span: &'a vectorcraft_doc::text::RubySpan, text: &str) -> Vec<std::borrow::Cow<'a, vectorcraft_doc::text::RubySpan>> {
+    use std::borrow::Cow;
+    use vectorcraft_doc::RubyKind;
+    if span.kind == RubyKind::Group {
+        return vec![Cow::Borrowed(span)];
+    }
+    let base = text.get(span.start..span.end).unwrap_or_default();
+    let group = |text: String, start: usize, end: usize| {
+        Cow::Owned(vectorcraft_doc::text::RubySpan { start, end, text, kind: RubyKind::Group, ..span.clone() })
+    };
+    match span.mono_parts(base) {
+        Some(parts) => parts.into_iter().map(|(a, b, part)| group(part, span.start + a, span.start + b)).collect(),
+        None => vec![group(span.text.chars().filter(|&c| c != ' ' && c != '\u{3000}').collect(), span.start, span.end)],
+    }
 }
 
 fn collect_ruby_pieces_for_span(
@@ -199,11 +219,30 @@ fn ruby_baseline(piece: &RubyPiece, baseline: f64, reading_ascent: f64, reading_
     }
 }
 
+/// Where the reading starts along the line, its characters set side by side.
 fn ruby_destination(piece: &RubyPiece, base_width: f64, reading_width: f64) -> f64 {
     match piece.align {
-        RubyAlign::Center => piece.x0 + (base_width - reading_width) * 0.5,
+        RubyAlign::Center | RubyAlign::OneTwoOne | RubyAlign::EqualSpace => piece.x0 + (base_width - reading_width) * 0.5,
         RubyAlign::Start => piece.x0,
         RubyAlign::End => piece.x1 - reading_width,
+    }
+}
+
+/// The 1-2-1 and equal-space alignments of a reading of `count` characters, `reading_width` long,
+/// over a longer base: the space before its first character and the space added between each two.
+/// None for the other alignments, or when the reading is not shorter than its base.
+fn ruby_spread(piece: &RubyPiece, base_width: f64, reading_width: f64, count: usize) -> Option<(f64, f64)> {
+    let slack = base_width - reading_width;
+    if count == 0 || slack <= EPS {
+        return None;
+    }
+    let n = count as f64;
+    match piece.align {
+        // Ends half the inner gaps: n gaps in all, (n - 1) whole and two halves.
+        RubyAlign::OneTwoOne => Some((slack / (2.0 * n), slack / n)),
+        // n + 1 equal gaps.
+        RubyAlign::EqualSpace => Some((slack / (n + 1.0), slack / (n + 1.0))),
+        _ => None,
     }
 }
 
@@ -213,9 +252,11 @@ fn place_vertical_ruby(piece: &RubyPiece, reading: &[PositionedGlyph], asc: f64,
     let clusters = ruby_clusters(reading);
     let (ruby_width, squeeze) = ruby_width(clusters.len() as f64 * cell, base_width, piece.overhang);
     let x = ruby_destination(piece, base_width, ruby_width);
+    // 1-2-1 and equal space spread a short reading over its base.
+    let (x, gap) = ruby_spread(piece, base_width, ruby_width, clusters.len()).map_or((x, 0.0), |(lead, gap)| (piece.x0 + lead, gap));
     let mut glyphs = Vec::new();
     for (index, cluster) in clusters.iter().enumerate() {
-        let anchor = Point::new(x + (index as f64 + 0.5) * cell, ruby_y);
+        let anchor = Point::new(x + (index as f64 + 0.5) * cell + index as f64 * gap, ruby_y);
         let centre = ruby_cluster_center(cluster, anchor);
         let transform = squeeze_transform(
             Affine::rotate_about(-std::f64::consts::FRAC_PI_2, anchor) * Affine::translate((anchor.x - centre.x, anchor.y - centre.y)),
@@ -260,6 +301,17 @@ fn place_horizontal_ruby(
     let reading_width = (line.x1 - line.x0).max(0.0);
     let (ruby_width, squeeze) = ruby_width(reading_width, base_width, piece.overhang);
     let x = ruby_destination(piece, base_width, ruby_width);
+    // 1-2-1 and equal space spread a short reading over its base, each character cluster moved on
+    // by the gaps before it.
+    if let Some((lead, gap)) = ruby_spread(piece, base_width, ruby_width, ruby_clusters(reading).len()) {
+        let start = piece.x0 + lead;
+        let mut glyphs = Vec::new();
+        for (index, cluster) in ruby_clusters(reading).iter().enumerate() {
+            let transform = Affine::translate((start + index as f64 * gap - line.x0, ruby_y - line.baseline));
+            glyphs.extend(cluster.iter().map(|glyph| ruby_glyph(glyph, transform, piece.run, piece.byte, piece.line)));
+        }
+        return glyphs;
+    }
     let transform = squeeze_transform(Affine::translate((x - line.x0, ruby_y - line.baseline)), x, squeeze);
     reading.iter().map(|glyph| ruby_glyph(glyph, transform, piece.run, piece.byte, piece.line)).collect()
 }

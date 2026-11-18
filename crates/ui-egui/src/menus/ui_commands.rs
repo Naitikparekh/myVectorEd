@@ -1364,6 +1364,12 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "{} open Mojikumi Settings (the Paragraph panel menu's Mojikumi Settings…, with Show East Asian Options) on the paragraphs the Paragraph panel acts on, filled in with the custom Mojikumi set they share or Line-end Punctuation Half Width's switches, named Custom (dialog `mojikumiSettings`: name, punctuation (full|shared|half), lineStartFlush, lineEndHalf, lineEndDot, latinSpace (% of an em 0..50)): OK runs text.setFormat {mojikumi: {…}} on them as one undo step; an error with no type selected, an empty name or a space out of range",
     ),
     (
+        "ui.ruby",
+        "Ruby…",
+        "",
+        "{} open Ruby (the Character panel menu's Ruby…, with Show East Asian Options) on the characters the Type tool has selected, or all the text of the first selected type object, filled in with the ruby over exactly that range or the defaults (dialog `ruby`: text, mono, position (above|below), align (start|center|end|oneTwoOne|equalSpace), size (% 1..100), overhang): OK runs type.ruby over the range as one undo step, and an empty reading takes the ruby off it; an error with no type selected",
+    ),
+    (
         "ui.tateChuYokoSettings",
         "Tate-chu-yoko Settings…",
         "",

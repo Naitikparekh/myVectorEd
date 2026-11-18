@@ -111,6 +111,7 @@ pub mod rename_artboards;
 pub(crate) mod revolve;
 pub(crate) mod revolve_gizmo;
 pub(crate) mod revolve_lights;
+pub mod ruby;
 pub mod safe_mode;
 pub mod saturate;
 pub mod save_brush_library;
@@ -379,6 +380,7 @@ registry! {
     BulletsAndNumbering: [bullets_numbering::KIND] => bullets_numbering::SPEC,
     KinsokuSettings: [kinsoku_settings::KIND] => kinsoku_settings::SPEC,
     MojikumiSettings: [mojikumi_settings::KIND] => mojikumi_settings::SPEC,
+    Ruby: [ruby::KIND] => ruby::SPEC,
     TateChuYokoSettings: [tate_chu_yoko::KIND] => tate_chu_yoko::SPEC,
     WarichuSettings: [warichu::KIND] => warichu::SPEC,
     CompositeFonts: [composite_fonts::KIND] => composite_fonts::SPEC,
