@@ -1402,6 +1402,9 @@ pub(crate) struct StyleRead {
     pub appearance: Appearance,
     /// An object other than type is read with it ([`crate::import::ai::style::ArtStyle::simple`]).
     pub simple: bool,
+    /// A path or compound path is read with it, its several fills and strokes live
+    /// ([`crate::import::ai::style::ArtStyle::stacked`]).
+    pub stacked: bool,
     /// An image without an opacity mask is read with it where its live warp draws as its drawn
     /// look ([`crate::import::ai::style::ArtStyle::image_warp`]).
     pub image_warp: bool,
@@ -1451,7 +1454,14 @@ pub(crate) fn read_art_style(section: &[u8], name: &str, own_gradient: Option<&P
             s.brush = Some(brush);
         }
     }
-    Some(StyleRead { appearance, simple: st.simple, image_warp: st.image_warp, pathfinder: st.pathfinder, transparency: st.transparency })
+    Some(StyleRead {
+        appearance,
+        simple: st.simple,
+        stacked: st.stacked,
+        image_warp: st.image_warp,
+        pathfinder: st.pathfinder,
+        transparency: st.transparency,
+    })
 }
 
 /// Is art style `name` of `section` read on `object` as far as an effect that moves the outline

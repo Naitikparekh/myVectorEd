@@ -111,7 +111,7 @@ fn bakes_members(n: &Node) -> bool {
 /// Whether `n` may be written with an art style ([`styled_objects`]).
 fn candidate(n: &Node) -> bool {
     let brushed = brushed(n) && matches!(n.kind, NodeKind::Path { .. } | NodeKind::Compound { .. });
-    let styled = !n.appearance.effects.is_empty() || n.extras().graphic_style.is_some() || brushed;
+    let styled = !n.appearance.effects.is_empty() || n.extras().graphic_style.is_some() || brushed || stacked(n);
     if !styled || n.knockout_shape {
         return false;
     }
@@ -132,6 +132,27 @@ fn warped_image(n: &Node) -> bool {
         && n.extras().mask.is_none()
         && matches!(n.appearance.effects.as_slice(), [e] if e.id.starts_with("warp."))
         && n.appearance.items.iter().all(|i| i.paint().is_none() && i.effects().is_empty())
+}
+
+/// Is `n` a path or compound path with several fills or several strokes that paint, each in a solid
+/// colour, without a brush or effects of its own: one the reader reads back with its stack of fills
+/// and strokes live (`read::ops`' `styled`, a style that is
+/// [`crate::import::ai::style::ArtStyle::stacked`]) instead of as a group of a path for each?
+fn stacked(n: &Node) -> bool {
+    if !matches!(n.kind, NodeKind::Path { .. } | NodeKind::Compound { .. }) {
+        return false;
+    }
+    let painting = || n.appearance.items.iter().filter(|i| !i.paint().is_none());
+    let fills = painting().filter(|i| matches!(i, AppearanceItem::Fill(_))).count();
+    let strokes = painting().filter(|i| matches!(i, AppearanceItem::Stroke(_))).count();
+    // Solid colours, and gradients on fills: the reader places each gradient of a stack where the
+    // drawn look has it.
+    let held = |i: &AppearanceItem| match i {
+        AppearanceItem::Fill(f) => matches!(f.paint, Paint::Solid { .. } | Paint::Gradient(_)),
+        AppearanceItem::Stroke(s) => matches!(s.paint, Paint::Solid { .. }) && s.brush.is_none(),
+    };
+    let plain = painting().all(|i| held(i) && i.effects().is_empty());
+    (fills > 1 || strokes > 1) && plain
 }
 
 /// Does `n` have a stroke with a brush that paints, one that its art style holds ([`Writer::style_text`]
@@ -711,7 +732,9 @@ impl Writer<'_> {
             return Some(name);
         }
         let brushed = brushed(orig);
-        if (orig.appearance.effects.is_empty() && !brushed) || !(own_style_holds(&orig.appearance) || warped_image(orig)) {
+        // A stack of fills and strokes may have their own opacity and blending modes.
+        let stack = stacked(orig) && !orig.appearance.effects.iter().any(panel_only);
+        if (orig.appearance.effects.is_empty() && !brushed && !stack) || !(own_style_holds(&orig.appearance) || warped_image(orig) || stack) {
             return None;
         }
         let graded = orig.appearance.items.iter().any(|i| matches!(i.paint(), Paint::Gradient(_)));
@@ -932,8 +955,13 @@ fn object_rule(n: &Node) -> FillRule {
 /// ([`warped_image`]).
 fn own_style_holds(ap: &Appearance) -> bool {
     let plain = |i: &AppearanceItem| i.opacity() >= 1.0 && i.blend() == BlendMode::Normal && i.effects().is_empty();
-    let panel_only = |e: &Effect| ["warp.", "distort.", "blur."].iter().any(|p| e.id.starts_with(p));
     ap.items.iter().filter(|i| !i.paint().is_none()).all(plain) && !ap.effects.iter().any(panel_only)
+}
+
+/// Is `e` a Warp, Distort & Transform or Blur effect, written only in the Graphic Styles panel's
+/// styles ([`own_style_holds`])?
+fn panel_only(e: &Effect) -> bool {
+    ["warp.", "distort.", "blur."].iter().any(|p| e.id.starts_with(p))
 }
 
 /// Does the reader read graphic style `g` from style text `text` as it is? It leaves out a graphic
@@ -956,12 +984,17 @@ fn panel_reads(g: &GraphicStyle, text: &str) -> bool {
 /// style of one Warp? The reader takes such an image's Warp where it draws as its drawn look.
 fn object_reads(n: &Node, text: &str) -> bool {
     let section = known_style("x", text);
-    let own = n.appearance.fill().map(|f| &f.paint).filter(|p| matches!(p, Paint::Gradient(_)));
+    // The object's gradient fill, below other fills in a stack too.
+    let own = n.appearance.items.iter().find_map(|i| match i {
+        AppearanceItem::Fill(f) if matches!(f.paint, Paint::Gradient(_)) => Some(&f.paint),
+        _ => None,
+    });
     let Some(mut read) = crate::import::read_art_style(section.as_bytes(), "x", own) else { return false };
     let group = matches!(n.kind, NodeKind::Group { .. });
     let image = matches!(n.kind, NodeKind::Image(_));
     if (image && !(read.image_warp && warped_image(n)))
-        || (!image && !read.simple)
+        // A path or compound path is also read with a stack of fills and strokes.
+        || (!image && !read.simple && !(read.stacked && !group))
         || (group && !read.appearance.items.is_empty())
         || (!group && read.pathfinder)
         || !crate::import::style_moves_with(section.as_bytes(), "x", n)

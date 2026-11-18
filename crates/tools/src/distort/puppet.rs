@@ -3,8 +3,11 @@
 //! With artwork selected the tool shows pins at once: the ones already placed on it, else
 //! automatic pins at the centre and the end of each limb ([`default_pins`]). A click on the artwork
 //! adds a pin and selects it; Shift-click adds pins to the selection (or takes them out); dragging
-//! a pin moves every selected pin and warps the art; Alt-dragging near (not on) a selected pin
-//! turns the art around it, and that pin keeps the turn; Delete/Backspace remove the selected pins.
+//! a pin moves every selected pin and warps the art; near (not on) a selected pin a dotted circle
+//! shows, and dragging there turns the art around that pin, which keeps the turn ("position the
+//! cursor near to, but not over the pins. When a dotted circle appears, drag to visually rotate
+//! the mesh": <https://helpx.adobe.com/illustrator/using/tool-techniques/puppet-warp-tool.html>);
+//! Delete/Backspace remove the selected pins.
 //! A click off the mesh places nothing and says so. Escape during a drag cancels it: the art, its
 //! pins and the selected pins go back to how the press found them.
 //!
@@ -367,7 +370,7 @@ impl Tool for PuppetWarpTool {
                     return vec![];
                 };
                 let set = &c.set;
-                if ev.mods.alt
+                if !ev.mods.shift
                     && let Some(i) = self.turn_pin_at(cx, set, p)
                     && let Some(q) = set.pins.get(i)
                 {
@@ -466,10 +469,10 @@ impl Tool for PuppetWarpTool {
                 });
                 out.push(Overlay::Anchor { p: q.at, color: BLUE, filled: sel, size: 3.0 });
             }
-            // The dotted circle of a turn: around the pin being turned, or the one Alt would turn.
+            // The dotted circle of a turn: around the pin being turned, or the one a drag would turn.
             let ring = match (self.drag, self.hover) {
                 (Some(Gesture::Turn { pin, .. }), _) => Some(pin),
-                (None, Some((h, mods))) if mods.alt => self.turn_pin_at(cx, &c.set, h),
+                (None, Some((h, mods))) if !mods.shift => self.turn_pin_at(cx, &c.set, h),
                 _ => None,
             };
             if let Some(q) = ring.and_then(|i| c.set.pins.get(i)) {
@@ -484,7 +487,7 @@ impl Tool for PuppetWarpTool {
     }
     fn cursor(&self, cx: &ToolContext, p: Point, mods: Mods) -> Cursor {
         let Some(c) = self.pins(cx) else { return Cursor::Arrow };
-        if mods.alt && self.turn_pin_at(cx, &c.set, p).is_some() {
+        if !mods.shift && self.turn_pin_at(cx, &c.set, p).is_some() {
             Cursor::Rotate
         } else if Self::pin_at(cx, &c.set, p).is_some() {
             Cursor::Move
@@ -724,24 +727,29 @@ mod tests {
     }
 
     #[test]
-    fn alt_drag_near_a_selected_pin_turns_the_art_around_it() {
+    fn a_drag_near_a_selected_pin_turns_the_art_around_it() {
         let mut r = Rig::new();
         r.click(110.0, 150.0, Mods::default());
         let i = r.pins().len() - 1;
-        // Alt near (not on) the selected pin: the turn ring and cursor.
-        r.ev(PointerKind::Move, 125.0, 150.0, alt());
-        assert_eq!(r.cursor(125.0, 150.0, alt()), Cursor::Rotate);
+        // Near (not on) the selected pin, with no key held: the dotted ring and the turn cursor.
+        r.ev(PointerKind::Move, 125.0, 150.0, Mods::default());
+        assert_eq!(r.cursor(125.0, 150.0, Mods::default()), Cursor::Rotate);
+        assert_eq!(r.cursor(125.0, 150.0, alt()), Cursor::Rotate, "Alt turns too");
         assert!(r.overlays().iter().any(|o| matches!(o, Overlay::Path { dashed: true, .. })), "dotted ring");
-        assert_ne!(r.cursor(125.0, 150.0, Mods::default()), Cursor::Rotate, "only with Alt");
+        // Shift there adds pins rather than turning.
+        let shift = Mods { shift: true, ..Mods::default() };
+        assert_ne!(r.cursor(125.0, 150.0, shift), Cursor::Rotate);
+        r.ev(PointerKind::Move, 125.0, 150.0, shift);
+        assert!(!r.overlays().iter().any(|o| matches!(o, Overlay::Path { dashed: true, .. })), "no ring with Shift");
         // Drag a quarter turn around it.
-        assert_eq!(r.ev(PointerKind::Down, 125.0, 150.0, alt()), vec![Action::Begin("Puppet Warp".into())]);
-        let acts = r.ev(PointerKind::Drag, 110.0, 165.0, alt());
+        assert_eq!(r.ev(PointerKind::Down, 125.0, 150.0, Mods::default()), vec![Action::Begin("Puppet Warp".into())]);
+        let acts = r.ev(PointerKind::Drag, 110.0, 165.0, Mods::default());
         let Action::Preview(cmd, v) = &acts[0] else { panic!("{acts:?}") };
         assert_eq!(cmd, "object.puppetWarp");
         assert!((v["angles"][i].as_f64().unwrap() - 90.0).abs() < 1e-6, "{v}");
         assert_eq!(v["moved"][i], v["pins"][i], "the pin stays put");
         assert_eq!(v["angles"][0], Value::Null, "other pins turn freely");
-        r.ev(PointerKind::Up, 110.0, 165.0, alt());
+        r.ev(PointerKind::Up, 110.0, 165.0, Mods::default());
         // The turned pin keeps its turn through the next warp.
         let q = r.pins()[0].at;
         r.drag((q.x, q.y), (q.x + 5.0, q.y), Mods::default());
