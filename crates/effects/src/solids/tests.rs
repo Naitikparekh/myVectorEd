@@ -1748,8 +1748,8 @@ fn a_colored_solid_face_on_its_own_keeps_the_composites_colors() {
         });
         out
     };
-    let alone = surface(&n, vec![face.clone()], &paint, 1.0, BlendMode::Normal, true, true);
-    let batch = surface(&n, vec![face.clone()], &paint, 1.0, BlendMode::Normal, true, false);
+    let alone = surface(&n, vec![face.clone()], &paint, 1.0, BlendMode::Normal, true, true, None);
+    let batch = surface(&n, vec![face.clone()], &paint, 1.0, BlendMode::Normal, true, false, None);
     let [single] = alone.children().unwrap().as_slice() else { panic!("one face") };
     assert!(matches!(&single.kind, NodeKind::Group { clip: true, .. }), "a clipped face");
     // The face's paint cover and its three channel ramps.

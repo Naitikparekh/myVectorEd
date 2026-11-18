@@ -20,6 +20,8 @@ mod shading;
 pub use shading::{ClassicShading, ClassicSurface, LightGradient, RgbGradient, ShadeGradient};
 mod lights;
 pub use lights::{Light, Lights, MAX_LIGHTS};
+mod material;
+pub use material::{MATERIAL_PRESETS, Material};
 mod caps;
 mod mesh;
 pub use mesh::{Mesh, MeshedSolid, extrude_mesh, extrude_meshed, inflate_meshed, inflate_meshes, plane_mesh, revolve_mesh};
