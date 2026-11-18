@@ -1319,7 +1319,8 @@ impl<'a> Writer<'a> {
             return;
         }
         let items = self.items(n, &path.to_bezpath());
-        if items.iter().any(|i| i.opacity() < 1.0 || i.blend() != BlendMode::Normal) {
+        // A styled object's drawn look loses nothing: its style keeps each item's transparency.
+        if !self.in_look && items.iter().any(|i| i.opacity() < 1.0 || i.blend() != BlendMode::Normal) {
             self.warn(ITEM_TRANSPARENCY);
         }
         match (self.plain_paint(&items), items.as_slice()) {

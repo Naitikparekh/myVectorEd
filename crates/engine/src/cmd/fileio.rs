@@ -46,6 +46,7 @@ mod jp2read;
 mod metafile;
 mod naming;
 mod native;
+pub(crate) mod pair;
 mod pcxread;
 pub mod pdf;
 mod pdfimport;
@@ -171,6 +172,8 @@ mod tests;
 mod tests_affinity;
 #[cfg(test)]
 mod tests_artboard_fill;
+#[cfg(test)]
+mod tests_pair;
 #[cfg(test)]
 mod tests_pdf;
 #[cfg(test)]

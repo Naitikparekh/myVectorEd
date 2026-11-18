@@ -65,6 +65,7 @@ pub mod import_pdf;
 pub mod indexed_color;
 pub mod javascript_files;
 pub mod justification;
+pub mod kinsoku_settings;
 pub mod layer_options;
 pub mod layers_panel_options;
 pub mod liquify;
@@ -74,6 +75,7 @@ pub mod live_paint_selection;
 pub mod missing_fonts;
 pub mod missing_links;
 pub(crate) mod modal;
+pub mod mojikumi_settings;
 pub mod navigator_panel_options;
 pub mod new_brush;
 pub mod new_color_group;
@@ -109,6 +111,7 @@ pub mod rename_artboards;
 pub(crate) mod revolve;
 pub(crate) mod revolve_gizmo;
 pub(crate) mod revolve_lights;
+pub mod ruby;
 pub mod safe_mode;
 pub mod saturate;
 pub mod save_brush_library;
@@ -375,6 +378,9 @@ registry! {
     Hyphenation: [hyphenation::KIND] => hyphenation::SPEC,
     Justification: [justification::KIND] => justification::SPEC,
     BulletsAndNumbering: [bullets_numbering::KIND] => bullets_numbering::SPEC,
+    KinsokuSettings: [kinsoku_settings::KIND] => kinsoku_settings::SPEC,
+    MojikumiSettings: [mojikumi_settings::KIND] => mojikumi_settings::SPEC,
+    Ruby: [ruby::KIND] => ruby::SPEC,
     TateChuYokoSettings: [tate_chu_yoko::KIND] => tate_chu_yoko::SPEC,
     WarichuSettings: [warichu::KIND] => warichu::SPEC,
     CompositeFonts: [composite_fonts::KIND] => composite_fonts::SPEC,

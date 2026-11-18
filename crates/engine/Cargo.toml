@@ -63,6 +63,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+# The content hash a paired EPS save records in its native master (fileio/pair.rs). MIT OR
+# Apache-2.0; already in Cargo.lock (vectorcraft-pdf, vectorcraft-plugins), so this adds no new crate.
+sha2 = { version = "0.10", default-features = false }
 
 # Whether a recovery area folder is this account's own (`FolderStore::own_area`). Already in
 # Cargo.lock (tempfile, ui-egui), so this adds no new crate.
