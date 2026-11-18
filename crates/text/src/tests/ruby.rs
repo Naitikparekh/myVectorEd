@@ -275,3 +275,33 @@ fn mono_ruby_sets_each_part_over_its_own_character() {
         assert_eq!(placed(&mismatched), placed(&whole), "vertical {vertical}: three parts over two characters");
     }
 }
+
+/// Ruby alignment 1-2-1 (the JIS rule, W3C JLREQ 3.3.7) and equal space spread a reading shorter
+/// than its base over it, horizontal and vertical: with two reading characters and slack `s`,
+/// 1-2-1 moves them `∓s/4` from where Center sets them (gaps of s/4, s/2, s/4) and equal space
+/// `∓s/6` (three gaps of s/3). A reading as long as its base is centred by both.
+#[test]
+fn one_two_one_and_equal_space_spread_a_short_reading_over_its_base() {
+    for vertical in [false, true] {
+        let centres = |text: &str, reading: &str, align: RubyAlign| {
+            let mut t = ruby_text(text, text.len(), reading, 20.0);
+            t.vertical = vertical;
+            t.ruby[0].align = align;
+            let lay = layout(db(), &t);
+            lay.ruby.iter().filter_map(ink).map(|r| if vertical { (r.y0 + r.y1) * 0.5 } else { (r.x0 + r.x1) * 0.5 }).collect::<Vec<_>>()
+        };
+        let moved = |text: &str, reading: &str, align| {
+            let centre = centres(text, reading, RubyAlign::Center);
+            centres(text, reading, align).iter().zip(&centre).map(|(a, b)| a - b).collect::<Vec<_>>()
+        };
+        let jis = moved("漢字漢字", "かん", RubyAlign::OneTwoOne);
+        let equal = moved("漢字漢字", "かん", RubyAlign::EqualSpace);
+        assert_eq!((jis.len(), equal.len()), (2, 2));
+        assert!(jis[1] > 5.0 && (jis[0] + jis[1]).abs() < 1e-6, "vertical {vertical}: {jis:?}");
+        assert!((equal[0] + equal[1]).abs() < 1e-6, "vertical {vertical}: {equal:?}");
+        assert!((jis[1] / equal[1] - 1.5).abs() < 1e-6, "s/4 against s/6, vertical {vertical}: {jis:?} {equal:?}");
+        for align in [RubyAlign::OneTwoOne, RubyAlign::EqualSpace] {
+            assert!(moved("漢字", "かんじかん", align).iter().all(|d| d.abs() < 1e-6), "{align:?}: a longer reading is centred");
+        }
+    }
+}
