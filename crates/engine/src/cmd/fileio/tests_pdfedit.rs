@@ -1092,3 +1092,55 @@ fn gradients_and_patterns_come_back_from_the_editing_copy() {
         }
     }
 }
+
+/// A path given a second fill and a drop shadow in the Appearance panel, grouped with another path,
+/// saves as `.ai` and comes back from the editing copy alone as that group, holding one path with
+/// both fills (the top one at 50% in Multiply), its stroke and its shadow live (WS6; several fills on
+/// one object, https://helpx.adobe.com/illustrator/using/appearance-attributes.html).
+#[test]
+fn a_stack_of_fills_with_an_effect_comes_back_from_the_editing_copy() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 300, "height": 200})).unwrap();
+    s.execute("paint.setFill", &json!({"color": "#ff0000"})).unwrap();
+    let id = |v: Value| v["id"].as_u64().unwrap();
+    let stacked = id(s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 80, "height": 60})).unwrap());
+    let other = id(s.execute("shape.rectangle", &json!({"x": 120, "y": 10, "width": 40, "height": 40})).unwrap());
+    s.execute("appearance.addFill", &json!({"ids": [stacked]})).unwrap();
+    let stack = |s: &Session| {
+        let mut items = None;
+        s.doc().unwrap().doc.walk(|n| {
+            if n.id.0 == stacked {
+                items = Some(n.appearance.items.clone());
+            }
+        });
+        items.unwrap()
+    };
+    let top = stack(&s).iter().rposition(|i| matches!(i, vectorcraft_doc::AppearanceItem::Fill(_))).unwrap();
+    s.execute("appearance.setItem", &json!({"ids": [stacked], "index": top, "color": "#0000ff", "opacity": 50, "blend": "Multiply"})).unwrap();
+    s.execute("effect.apply", &json!({"effect": "stylize.dropShadow", "ids": [stacked]})).unwrap();
+    s.execute("object.group", &json!({"ids": [stacked, other]})).unwrap();
+    let want = stack(&s);
+    assert_eq!(want.iter().filter(|i| matches!(i, vectorcraft_doc::AppearanceItem::Fill(_))).count(), 2, "{want:?}");
+
+    let bytes = b64(&s.execute("document.export", &json!({"format": "ai"})).unwrap());
+    let copy = editing_copy(&bytes);
+    let layer = &copy.layers[0];
+    let [group] = layer.children().unwrap().as_slice() else { panic!("{layer:#?}") };
+    let members = group.children().unwrap_or_else(|| panic!("{group:#?}"));
+    assert_eq!(members.len(), 2, "{group:#?}");
+    let back = members.iter().find(|n| n.appearance.effects.len() == 1).unwrap_or_else(|| panic!("{members:#?}"));
+    assert!(matches!(back.kind, vectorcraft_doc::NodeKind::Path { .. }), "{back:#?}");
+    assert_eq!(back.appearance.effects[0].id, "stylize.dropShadow");
+    let fills: Vec<_> = back
+        .appearance
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            vectorcraft_doc::AppearanceItem::Fill(f) => Some(f),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills.len(), 2, "{:#?}", back.appearance);
+    assert_eq!((fills[1].opacity, fills[1].blend), (0.5, vectorcraft_color::BlendMode::Multiply));
+    assert_eq!(back.appearance.items.len(), want.len(), "{:#?}", back.appearance);
+}
