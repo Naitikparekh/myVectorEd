@@ -6773,10 +6773,11 @@ fn appearances_the_reader_wouldnt_read_are_their_drawn_look() {
     let mut doc = Document::new(200.0, 100.0);
     let layer = doc.layers[0].id;
     let shadow = fx("stylize.dropShadow", serde_json::json!({}));
-    // Two fills and an effect: the reader keeps such an object's drawn look.
+    // Two fills, one with an effect of its own, and an effect: the reader keeps such an object's
+    // drawn look.
     let mut two = styled_rect(&mut doc, "Two fills", Rect::new(10.0, 10.0, 40.0, 40.0), solid(Color::BLACK), Paint::None, vec![shadow.clone()]);
     let mut ap = (*two.appearance).clone();
-    ap.items.push(AppearanceItem::Fill(FillLayer { opacity: 0.5, ..FillLayer::new(solid(Color::WHITE)) }));
+    ap.items.push(AppearanceItem::Fill(FillLayer { opacity: 0.5, effects: vec![shadow.clone()], ..FillLayer::new(solid(Color::WHITE)) }));
     two.appearance = ap.into();
     doc.insert(Some(layer), usize::MAX, two).unwrap();
     // A warp on a path: the reader keeps a path's drawn look for it.
@@ -7575,13 +7576,13 @@ fn a_link_left_out_warns() {
         n.extras_mut().graphic_style = Some(id);
         n
     };
-    // A style of two fills: a path isn't read with it.
+    // A style of two fills: a path is read with it, its stack live.
     let (warned, back) = warns(&|doc, id| {
         let ap = doc.graphic_style_by_id(id).unwrap().appearance.clone();
         linked(Node::path(doc.alloc_id(), shapes::rectangle(Rect::new(10.0, 10.0, 50.0, 40.0)), ap), id)
     });
-    assert!(warned);
-    assert_eq!(back.layers[0].children().unwrap()[0].extras().graphic_style, None);
+    assert!(!warned);
+    assert!(back.layers[0].children().unwrap()[0].extras().graphic_style.is_some());
     assert!(back.graphic_style("Layered").is_some());
     // An image, a symbol instance and a knockout shape are never written with a style.
     let (warned, _) = warns(&|doc, _| {
@@ -7859,14 +7860,24 @@ fn a_linked_paths_drawn_look_warns_only_for_what_its_style_leaves_out() {
     assert!(!warnings.iter().any(|w| w == writer::STROKES), "{warnings:?}");
     assert!(n.extras().graphic_style.is_some(), "{n:?}");
     assert_eq!(n.appearance.stroke().and_then(|s| s.profile.clone()), Some(profile.clone()));
-    let (_, warnings, p) = read_one(|doc| {
+    // A fill with transparency of its own is read back in the style's stack, with its link.
+    let (n, warnings, p) = read_one(|doc| {
         let mut fill = FillLayer::new(solid(Color::rgb(0.2, 0.2, 0.9)));
         fill.opacity = 0.5;
         fill.blend = BlendMode::Screen;
         linked(doc, fill)
     });
+    assert!(p.contains("1 (Linked) XW"), "{p}");
+    assert!(!warnings.iter().any(|w| w == writer::ITEM_TRANSPARENCY), "{warnings:?}");
+    assert!(n.extras().graphic_style.is_some(), "{n:?}");
+    // A fill with an effect of its own isn't: the path is its drawn look, its link left out.
+    let (_, warnings, p) = read_one(|doc| {
+        let mut fill = FillLayer::new(solid(Color::rgb(0.2, 0.2, 0.9)));
+        fill.effects = vec![drop_shadow()];
+        linked(doc, fill)
+    });
     assert!(!p.contains("1 (Linked) XW"), "{p}");
-    assert!(warnings.iter().any(|w| w == writer::ITEM_TRANSPARENCY), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w == writer::STYLE_LINKS), "{warnings:?}");
 }
 
 /// Each effect a graphic style can hold, in a style of its own, reads back with its settings, whatever
@@ -13003,4 +13014,76 @@ fn a_cut_clipping_object_without_room_for_its_mask_gets_no_carrier() {
             assert_eq!(carriers, [true], "{text}");
         }
     }
+}
+
+/// A path with several fills and strokes in solid colours, without live effects, and a compound path
+/// with them under a drop shadow, are written with an art style of their stack: they read back as
+/// one path and one compound path each with every fill and stroke live, in order, with their own
+/// visibility, opacity and blending mode, instead of as a group of a path for each.
+#[test]
+fn several_fills_and_strokes_are_written_as_a_live_stack() {
+    let stack = |shadow: bool| {
+        let mut top = FillLayer::new(solid(Color::rgb(0.2, 0.4, 0.8)));
+        (top.opacity, top.blend) = (0.5, BlendMode::Multiply);
+        let mut hidden = StrokeLayer::new(solid(Color::rgb(0.0, 0.6, 0.0)), 8.0);
+        hidden.visible = false;
+        Appearance {
+            items: vec![
+                AppearanceItem::Fill(FillLayer::new(solid(Color::rgb(0.9, 0.1, 0.1)))),
+                AppearanceItem::Fill(top),
+                AppearanceItem::Stroke(hidden),
+                AppearanceItem::Stroke(StrokeLayer::new(black_fill(), 2.0)),
+            ],
+            effects: if shadow { vec![drop_shadow()] } else { vec![] },
+            ..Appearance::default()
+        }
+    };
+    let mut doc = Document::new(300.0, 100.0);
+    let path = named(Node::path(doc.alloc_id(), shapes::rectangle(Rect::new(10.0, 10.0, 50.0, 40.0)), stack(false)), "Stack");
+    put(&mut doc, path);
+    let mut ring = ring(&mut doc, stack(true));
+    if let NodeKind::Compound { rule, .. } = &mut ring.kind {
+        *rule = FillRule::NonZero;
+    }
+    put(&mut doc, named(ring, "Ring"));
+    let out = export_ai_editing(&doc, &opts()).unwrap();
+    assert!(shown(&out.program).contains("(Anon 1) XW"), "written with a style");
+    let back = read_back(&doc);
+    let objects = back.layers[0].children().unwrap();
+    assert_eq!(objects.len(), 2, "{objects:?}");
+    for (n, want) in objects.iter().zip([stack(false), stack(true)]) {
+        assert!(matches!(n.kind, NodeKind::Path { .. } | NodeKind::Compound { .. }), "{n:?}");
+        assert!(writer::same_appearance(&n.appearance, &want), "{:?}\n{want:?}", n.appearance);
+    }
+}
+
+/// A path with a gradient fill under a half-opaque solid fill and a stroke is written with an art
+/// style of its stack and reads back as one path with its fills and stroke live, the gradient where
+/// it was placed.
+#[test]
+fn a_stack_with_a_gradient_fill_is_written_live() {
+    let stack = || {
+        let mut top = FillLayer::new(solid(Color::rgb(0.2, 0.4, 0.8)));
+        top.opacity = 0.5;
+        Appearance {
+            items: vec![
+                AppearanceItem::Fill(FillLayer::new(gradient_paint(sunset(), None, None))),
+                AppearanceItem::Fill(top),
+                AppearanceItem::Stroke(StrokeLayer::new(black_fill(), 2.0)),
+            ],
+            ..Appearance::default()
+        }
+    };
+    let (n, warnings, p) = read_one(|doc| named(Node::path(doc.alloc_id(), shapes::rectangle(Rect::new(10.0, 10.0, 90.0, 60.0)), stack()), "Graded"));
+    assert!(p.contains("(Anon 1) XW"), "{warnings:?}");
+    assert!(matches!(n.kind, NodeKind::Path { .. }), "{n:?}");
+    let items = &n.appearance.items;
+    assert_eq!(items.len(), 3, "{items:?}");
+    let AppearanceItem::Fill(f) = &items[0] else { panic!("{items:?}") };
+    let Paint::Gradient(g) = &f.paint else { panic!("{f:?}") };
+    assert_eq!(g.gradient.stops.len(), 3);
+    assert!(writer::same_appearance(
+        &Appearance { items: items[1..].to_vec(), ..Appearance::default() },
+        &Appearance { items: stack().items[1..].to_vec(), ..Appearance::default() }
+    ));
 }

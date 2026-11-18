@@ -130,6 +130,9 @@
 //!   (`%AI9_BeginArtStyles`, each `/KnownStyle :` with its name and a filter tree: a chain of the
 //!   stack of fills and strokes with the contents among them, the effects and the blend filter), the
 //!   Graphic Styles panel's first; the panel's order follows the palette (`%AI9_BeginArtStyleList`).
+//!   A path or compound path with several fills or strokes in solid colours (a fill may be its one
+//!   gradient) is written the same way,
+//!   with a style of its stack, whether or not it has live effects.
 //!   A fill filter fills by the non-zero rule (`0 /Bool (UseEvenOdd)`), so a filled object that
 //!   fills by the even-odd rule is written as its drawn look. A style is written only when the
 //!   reader reads it back as the object's appearance (or the graphic style's).
@@ -177,7 +180,8 @@
 //! in all left out), instances of symbols the document doesn't have as empty groups, symbols' 9-slice
 //! guides, export types and dynamic type left out, live objects (placed documents included) as their art,
 //! strokes a plain line can't draw and the object's art style doesn't hold
-//! as their filled outlines, several fills or strokes as a group of a path for each, freeform
+//! as their filled outlines, several fills or strokes on objects other than paths and compound paths, or
+//! in gradients or patterns, or that the reader wouldn't read back, as a group of a path for each, freeform
 //! gradient swatches, gradient swatches of more than 256 stops, swatches of patterns written as
 //! tiles and the placement of pattern swatches that move, turn or scale their pattern, the opacity and blending modes of single fills and strokes, opacity masks on
 //! layers and opacity masks nested too deep, and, on objects written without an art style, live

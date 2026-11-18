@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Document Raster Effects Settings…",
         ["Effect"],
         None,
-        "{resolution?: ppi (1–2400) | \"screen\" (72) | \"medium\" (150) | \"high\" (300), colorModel?: \"rgb\"|\"cmyk\" (the document's mode)|\"grayscale\"|\"bitmap\", background?: \"transparent\"|\"white\", antiAlias?: bool (off: hard edges), clippingMask?: bool (white background only under the art; Rasterize clips to the art), addAround?: pt (0–1000, room around the art), preserveSpotColors?: bool (stored)} how raster effects (shadows, glows, blurs, feathers) become images in PDF export and Expand Appearance, and the defaults of object.rasterize; one undo step; always → the settings",
+        "{resolution?: ppi (1–2400) | \"screen\" (72) | \"medium\" (150) | \"high\" (300), colorModel?: \"rgb\"|\"cmyk\" (the document's mode)|\"grayscale\"|\"bitmap\", background?: \"transparent\"|\"white\", antiAlias?: bool (off: hard edges), clippingMask?: bool (white background only under the art; Rasterize clips to the art), addAround?: pt (0–1000, room around the art), preserveSpotColors?: bool (stored)} how raster effects (shadows, glows, blurs, feathers) become images in PDF export and Expand Appearance, and the defaults of object.rasterize; a change of resolution scales the effect sizes given in pixels of it (Color Halftone's maxRadius), within their ranges, so effects keep their look; one undo step; always → the settings",
         has_doc,
         settings
     )]
@@ -128,12 +128,54 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if ppi != d.raster_effects_ppi || r != d.raster_effects {
         s.edit("Document Raster Effects Settings", |d, _| {
+            rescale_pixel_params(d, ppi);
             d.raster_effects_ppi = ppi;
             d.raster_effects = r;
             Ok(())
         })?;
     }
     Ok(settings_json(&s.doc()?.doc))
+}
+
+/// Resolution Independent Effects: when the Document Raster Effects resolution changes from `d`'s to
+/// `ppi`, the effect parameters that are sizes in pixels of that resolution (Color Halftone's
+/// `maxRadius`, [`effects::raster_px_range`]) scale by the change, kept within their range, so the
+/// effect looks the same at the new resolution; their other parameters are left as they are
+/// (<https://helpx.adobe.com/illustrator/desktop/special-effects-styles/apply-filter-effects/rasterization-options.html>,
+/// "Resolution Independent Effects"). Effects of objects, of their fills and strokes and of the
+/// graphic styles change.
+fn rescale_pixel_params(d: &mut Document, ppi: f64) {
+    let old = d.raster_effects_ppi;
+    let k = ppi / old;
+    if !(k.is_finite() && k > 0.0) || k == 1.0 {
+        return;
+    }
+    let has_px = |e: &Effect| e.params.as_object().is_some_and(|m| m.keys().any(|key| effects::raster_px_range(&e.id, key).is_some()));
+    let rescale = |e: &mut Effect| {
+        let id = e.id.clone();
+        let Some(m) = e.params.as_object_mut() else { return };
+        for (key, v) in m.iter_mut() {
+            if let (Some(range), Some(x)) = (effects::raster_px_range(&id, key), v.as_f64())
+                && x.is_finite()
+            {
+                *v = json!((x * k).clamp(*range.start(), *range.end()));
+            }
+        }
+    };
+    let in_appearance = |a: &Appearance| a.effects.iter().chain(a.items.iter().flat_map(|i| i.effects())).any(has_px);
+    let rescale_appearance = |a: &mut Appearance| {
+        for e in a.effects.iter_mut().chain(a.items.iter_mut().flat_map(|i| i.effects_mut().iter_mut())) {
+            if has_px(e) {
+                rescale(e);
+            }
+        }
+    };
+    d.edit_nodes_where(|n| in_appearance(&n.appearance), |n| rescale_appearance(&mut n.appearance));
+    if d.graphic_styles.iter().any(|g| in_appearance(&g.appearance)) {
+        for g in d.graphic_styles.iter_mut() {
+            rescale_appearance(&mut g.appearance);
+        }
+    }
 }
 
 /// `art` in a clip group clipped by `path` filled by `rule` (a clipping path that paints nothing).
@@ -844,6 +886,52 @@ mod tests {
     use vectorcraft_doc::NodeKind;
 
     use crate::Session;
+
+    /// Resolution Independent Effects (rasterization-options page): a change of the Document
+    /// Raster Effects resolution scales Color Halftone's Max. Radius, in pixels of that resolution,
+    /// on objects, their fills and graphic styles, within its 4–127 range, leaving the other
+    /// parameters and other effects alone, as one undo step.
+    #[test]
+    fn a_resolution_change_scales_pixel_sizes_of_effects() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 300, "height": 300})).unwrap();
+        let a = s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 100})).unwrap()["id"].as_u64().unwrap();
+        let b = s.execute("shape.rectangle", &json!({"x": 150, "y": 10, "width": 100, "height": 100})).unwrap()["id"].as_u64().unwrap();
+        s.execute("effect.apply", &json!({"effect": "pixelate.colorHalftone", "params": {"maxRadius": 8, "channel1": 30}, "ids": [a]})).unwrap();
+        s.execute("effect.apply", &json!({"effect": "blur.gaussian", "params": {"radius": 4}, "ids": [a]})).unwrap();
+        s.execute("effect.apply", &json!({"effect": "pixelate.colorHalftone", "params": {"maxRadius": 100}, "item": 0, "ids": [b]})).unwrap();
+        s.execute("graphicStyle.new", &json!({"id": a, "name": "Dots"})).unwrap();
+        let params = |s: &Session, id: u64, item: Option<usize>, k: usize| {
+            let d = &s.doc().unwrap().doc;
+            let n = d.node(vectorcraft_doc::NodeId(id)).unwrap();
+            n.appearance.effects_at(item).unwrap()[k].params.clone()
+        };
+        let style = |s: &Session| {
+            s.doc().unwrap().doc.graphic_styles.iter().find(|g| g.name == "Dots").unwrap().appearance.effects[0].params["maxRadius"].as_f64().unwrap()
+        };
+
+        s.execute("document.rasterEffectsSettings", &json!({"resolution": 150})).unwrap();
+        let p = params(&s, a, None, 0);
+        assert!((p["maxRadius"].as_f64().unwrap() - 8.0 * 150.0 / 72.0).abs() < 1e-9, "{p}");
+        assert_eq!(p["channel1"].as_f64(), Some(30.0));
+        assert_eq!(params(&s, a, None, 1)["radius"].as_f64(), Some(4.0), "a size in points stays");
+        assert_eq!(params(&s, b, Some(0), 0)["maxRadius"].as_f64(), Some(127.0), "kept within the range");
+        assert!((style(&s) - 8.0 * 150.0 / 72.0).abs() < 1e-9);
+
+        // Back to 72 ppi: the unclamped value comes back exactly.
+        s.execute("document.rasterEffectsSettings", &json!({"resolution": 72})).unwrap();
+        assert!((params(&s, a, None, 0)["maxRadius"].as_f64().unwrap() - 8.0).abs() < 1e-9);
+
+        // Only the resolution moves the sizes, and undo takes them back with it.
+        s.execute("document.rasterEffectsSettings", &json!({"resolution": 300})).unwrap();
+        let at300 = params(&s, a, None, 0)["maxRadius"].clone();
+        s.execute("document.rasterEffectsSettings", &json!({"background": "white"})).unwrap();
+        assert_eq!(params(&s, a, None, 0)["maxRadius"], at300);
+        s.execute("edit.undo", &json!({})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert!((params(&s, a, None, 0)["maxRadius"].as_f64().unwrap() - 8.0).abs() < 1e-9);
+        assert_eq!(s.doc().unwrap().doc.raster_effects_ppi, 72.0);
+    }
 
     #[test]
     fn settings_and_pdf_flattening() {
