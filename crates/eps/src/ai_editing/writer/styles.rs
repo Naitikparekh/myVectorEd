@@ -145,9 +145,14 @@ fn stacked(n: &Node) -> bool {
     let painting = || n.appearance.items.iter().filter(|i| !i.paint().is_none());
     let fills = painting().filter(|i| matches!(i, AppearanceItem::Fill(_))).count();
     let strokes = painting().filter(|i| matches!(i, AppearanceItem::Stroke(_))).count();
-    let solid = painting()
-        .all(|i| matches!(i.paint(), Paint::Solid { .. }) && i.effects().is_empty() && !matches!(i, AppearanceItem::Stroke(s) if s.brush.is_some()));
-    (fills > 1 || strokes > 1) && solid
+    // Solid colours, and gradients on fills: the reader places each gradient of a stack where the
+    // drawn look has it.
+    let held = |i: &AppearanceItem| match i {
+        AppearanceItem::Fill(f) => matches!(f.paint, Paint::Solid { .. } | Paint::Gradient(_)),
+        AppearanceItem::Stroke(s) => matches!(s.paint, Paint::Solid { .. }) && s.brush.is_none(),
+    };
+    let plain = painting().all(|i| held(i) && i.effects().is_empty());
+    (fills > 1 || strokes > 1) && plain
 }
 
 /// Does `n` have a stroke with a brush that paints, one that its art style holds ([`Writer::style_text`]
@@ -979,7 +984,11 @@ fn panel_reads(g: &GraphicStyle, text: &str) -> bool {
 /// style of one Warp? The reader takes such an image's Warp where it draws as its drawn look.
 fn object_reads(n: &Node, text: &str) -> bool {
     let section = known_style("x", text);
-    let own = n.appearance.fill().map(|f| &f.paint).filter(|p| matches!(p, Paint::Gradient(_)));
+    // The object's gradient fill, below other fills in a stack too.
+    let own = n.appearance.items.iter().find_map(|i| match i {
+        AppearanceItem::Fill(f) if matches!(f.paint, Paint::Gradient(_)) => Some(&f.paint),
+        _ => None,
+    });
     let Some(mut read) = crate::import::read_art_style(section.as_bytes(), "x", own) else { return false };
     let group = matches!(n.kind, NodeKind::Group { .. });
     let image = matches!(n.kind, NodeKind::Image(_));

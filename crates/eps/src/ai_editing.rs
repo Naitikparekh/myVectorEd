@@ -130,7 +130,8 @@
 //!   (`%AI9_BeginArtStyles`, each `/KnownStyle :` with its name and a filter tree: a chain of the
 //!   stack of fills and strokes with the contents among them, the effects and the blend filter), the
 //!   Graphic Styles panel's first; the panel's order follows the palette (`%AI9_BeginArtStyleList`).
-//!   A path or compound path with several fills or strokes in solid colours is written the same way,
+//!   A path or compound path with several fills or strokes in solid colours (a fill may be its one
+//!   gradient) is written the same way,
 //!   with a style of its stack, whether or not it has live effects.
 //!   A fill filter fills by the non-zero rule (`0 /Bool (UseEvenOdd)`), so a filled object that
 //!   fills by the even-odd rule is written as its drawn look. A style is written only when the

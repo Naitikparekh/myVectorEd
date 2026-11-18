@@ -13056,3 +13056,34 @@ fn several_fills_and_strokes_are_written_as_a_live_stack() {
         assert!(writer::same_appearance(&n.appearance, &want), "{:?}\n{want:?}", n.appearance);
     }
 }
+
+/// A path with a gradient fill under a half-opaque solid fill and a stroke is written with an art
+/// style of its stack and reads back as one path with its fills and stroke live, the gradient where
+/// it was placed.
+#[test]
+fn a_stack_with_a_gradient_fill_is_written_live() {
+    let stack = || {
+        let mut top = FillLayer::new(solid(Color::rgb(0.2, 0.4, 0.8)));
+        top.opacity = 0.5;
+        Appearance {
+            items: vec![
+                AppearanceItem::Fill(FillLayer::new(gradient_paint(sunset(), None, None))),
+                AppearanceItem::Fill(top),
+                AppearanceItem::Stroke(StrokeLayer::new(black_fill(), 2.0)),
+            ],
+            ..Appearance::default()
+        }
+    };
+    let (n, warnings, p) = read_one(|doc| named(Node::path(doc.alloc_id(), shapes::rectangle(Rect::new(10.0, 10.0, 90.0, 60.0)), stack()), "Graded"));
+    assert!(p.contains("(Anon 1) XW"), "{warnings:?}");
+    assert!(matches!(n.kind, NodeKind::Path { .. }), "{n:?}");
+    let items = &n.appearance.items;
+    assert_eq!(items.len(), 3, "{items:?}");
+    let AppearanceItem::Fill(f) = &items[0] else { panic!("{items:?}") };
+    let Paint::Gradient(g) = &f.paint else { panic!("{f:?}") };
+    assert_eq!(g.gradient.stops.len(), 3);
+    assert!(writer::same_appearance(
+        &Appearance { items: items[1..].to_vec(), ..Appearance::default() },
+        &Appearance { items: stack().items[1..].to_vec(), ..Appearance::default() }
+    ));
+}
