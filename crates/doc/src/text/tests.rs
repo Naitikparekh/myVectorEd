@@ -666,3 +666,27 @@ fn auto_alignment_saves_readable_by_older_builds() {
     // Files from before the flag keep their alignment.
     assert_eq!(serde_json::from_str::<ParaStyle>(r#"{"justify":"Center"}"#).unwrap().justify, Justify::Center);
 }
+
+/// A custom Mojikumi set is saved with its paragraph only when there is one, reads back as saved,
+/// and a set read from a file keeps its Japanese–Latin space to 0 to half an em.
+#[test]
+fn a_custom_mojikumi_set_is_saved_only_when_set_and_bounded_on_read() {
+    let plain = ParaStyle::default();
+    assert!(serde_json::to_value(&plain).unwrap().get("mojikumi_set").is_none());
+    let set = MojikumiSet {
+        name: "Mine".into(),
+        punctuation: MojikumiPunctuation::Shared,
+        line_start_flush: true,
+        line_end_half: true,
+        line_end_dot: false,
+        latin_space: 0.125,
+    };
+    let with = ParaStyle { mojikumi: Mojikumi::Custom, mojikumi_set: Some(set), ..ParaStyle::default() };
+    let saved = serde_json::to_value(&with).unwrap();
+    assert_eq!((saved["mojikumi"].as_str(), saved["mojikumi_set"]["punctuation"].as_str()), (Some("custom"), Some("shared")));
+    assert_eq!(serde_json::from_value::<ParaStyle>(saved).unwrap(), with);
+    for (read, kept) in [(9.0, MOJIKUMI_LATIN_SPACE_MAX), (-1.0, 0.0)] {
+        let p: ParaStyle = serde_json::from_value(serde_json::json!({"mojikumi_set": {"name": "x", "latinSpace": read}})).unwrap();
+        assert_eq!(p.mojikumi_set.unwrap().latin_space, kept);
+    }
+}

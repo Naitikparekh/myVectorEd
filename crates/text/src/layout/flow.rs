@@ -86,7 +86,7 @@ fn compose_para(
     // The same rule as the line loop below: an opening bracket starting a wrapped line gives up
     // the space before it.
     let start_credit = |i: usize| {
-        let flush = !rtl && MojikumiRules::of(para.mojikumi).flush_start;
+        let flush = !rtl && MojikumiRules::for_para(para).flush_start;
         sg.get(i).filter(|g| flush && g.lead <= 0.0).and_then(|g| punct_half(g, Punct::Opening)).unwrap_or(0.0)
     };
     let mut sim = pen.clone();
@@ -282,7 +282,7 @@ fn prepare_paragraph<'a, 'text>(
     }
     // Japanese composition (the paragraph's Mojikumi set): every punctuation mark set half width,
     // or consecutive punctuation sharing one half-em space…
-    let rules = MojikumiRules::of(para.mojikumi);
+    let rules = MojikumiRules::for_para(para);
     let mut compressed = if rules.half {
         halve_punctuation(&mut sg)
     } else if rules.share {
@@ -290,8 +290,8 @@ fn prepare_paragraph<'a, 'text>(
     } else {
         vec![]
     };
-    // …and a quarter em between Japanese and Latin text.
-    let mut wakan = if rules.wakan { space_japanese_and_latin(&mut sg) } else { vec![] };
+    // …and space (a quarter em in the predefined sets) between Japanese and Latin text.
+    let mut wakan = if rules.wakan > 0.0 { space_japanese_and_latin(&mut sg, rules.wakan) } else { vec![] };
     // Justification…: the glyphs at Desired word and letter spacing and glyph scaling, and how
     // far a justified line may move each one from it (Dynamic Text's Block on area type sets the
     // Desired word spacing to its word gap).
@@ -433,7 +433,7 @@ fn place_flow_line(cx: &mut Ctx<'_>, pen: &mut Pen<'_>, context: &mut PlacementC
     // space before it goes), and the line has that much more room. At a paragraph's start
     // that is the first-line indent: JIS X 4051's principle (JLREQ 3.1.5, Figure 71 ①).
     if !*rtl
-        && MojikumiRules::of(para.mojikumi).flush_start
+        && MojikumiRules::for_para(para).flush_start
         && let Some(glyph) = sg.get_mut(*i)
         && glyph.lead <= 0.0
         && let Some(half) = punct_half(glyph, Punct::Opening)
@@ -735,7 +735,7 @@ fn prepare_line_geometry(cx: &Ctx<'_>, t: &TextObject, paragraph: &ParagraphData
         trimmed -= 1;
     }
     let hyphen = (position.hyph && position.end > index).then(|| hyphen_glyph(&sg[position.end - 1]));
-    let rules = MojikumiRules::of(para.mojikumi).at_line_end(paragraph.rtl);
+    let rules = MojikumiRules::for_para(para).at_line_end(paragraph.rtl);
     let end_trim = trimmed
         .checked_sub(1)
         .filter(|&k| k >= index && rules.trims_line_end())

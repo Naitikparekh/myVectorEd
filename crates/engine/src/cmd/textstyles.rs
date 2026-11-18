@@ -249,6 +249,7 @@ pub fn para_attrs(v: &ParaStyle) -> Map<String, Value> {
         ("tabs", json!(v.tabs)),
         ("list", json!(v.list)),
         ("mojikumi", json!(v.mojikumi)),
+        ("mojikumi_set", json!(v.mojikumi_set)),
         ("direction", json!(v.direction)),
         ("leading_model", json!(v.leading_model)),
         ("burasagari", json!(v.burasagari)),

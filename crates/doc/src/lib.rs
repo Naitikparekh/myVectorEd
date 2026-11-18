@@ -128,9 +128,9 @@ pub use text::PATH_LEAD_MAX;
 pub use text::WarichuAlign;
 pub use text::{
     AreaFit, AreaOptions, Burasagari, CharAlign, CharPosition, CharStyle, Composer, Digits, FirstBaseline, HyphenationOptions, InlineArt,
-    JustificationOptions, Justify, Kinsoku, KinsokuShoriType, LeadingModel, Mojikumi, ParaDirection, ParaStyle, PathAlign, PathEffect, RubyAlign,
-    RubyPosition, RubySpan, ScriptMetrics, SingleWordJustify, TabAlign, TabStop, TextFlow, TextKind, TextObject, TextRun, TextStyleDef, TextWrap,
-    VerticalAlign, WrapShape,
+    JustificationOptions, Justify, Kinsoku, KinsokuShoriType, LeadingModel, MOJIKUMI_LATIN_SPACE_MAX, Mojikumi, MojikumiPunctuation, MojikumiSet,
+    ParaDirection, ParaStyle, PathAlign, PathEffect, RubyAlign, RubyPosition, RubySpan, ScriptMetrics, SingleWordJustify, TabAlign, TabStop,
+    TextFlow, TextKind, TextObject, TextRun, TextStyleDef, TextWrap, VerticalAlign, WrapShape,
 };
 pub use text::{CharClass, CompositeClass, CompositeFont, CompositePart, CompositeParts, CustomCharSet};
 pub use trace::TraceView;
