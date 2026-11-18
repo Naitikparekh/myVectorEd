@@ -1352,6 +1352,12 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "{} open Hyphenation (the Paragraph panel menu's Hyphenation…) on the paragraphs the Paragraph panel acts on, filled in with the values it shows (dialog `hyphenation`: hyphenate, wordsLongerThan 1..25, afterFirst 1..15, beforeLast 1..15, hyphenLimit 0..25 (0: no limit), hyphenationZone (pt), hyphenateCapitalized): OK runs text.setFormat with the values that changed, as one undo step; an error with no type selected",
     ),
     (
+        "ui.ruby",
+        "Ruby…",
+        "",
+        "{} open Ruby (the Character panel menu's Ruby…, with Show East Asian Options) on the characters the Type tool has selected, or all the text of the first selected type object, filled in with the ruby over exactly that range or the defaults (dialog `ruby`: text, mono, position (above|below), align (start|center|end|oneTwoOne|equalSpace), size (% 1..100), overhang): OK runs type.ruby over the range as one undo step, and an empty reading takes the ruby off it; an error with no type selected",
+    ),
+    (
         "ui.tateChuYokoSettings",
         "Tate-chu-yoko Settings…",
         "",

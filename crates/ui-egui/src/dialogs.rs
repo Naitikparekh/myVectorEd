@@ -109,6 +109,7 @@ pub mod rename_artboards;
 pub(crate) mod revolve;
 pub(crate) mod revolve_gizmo;
 pub(crate) mod revolve_lights;
+pub mod ruby;
 pub mod safe_mode;
 pub mod saturate;
 pub mod save_brush_library;
@@ -375,6 +376,7 @@ registry! {
     Hyphenation: [hyphenation::KIND] => hyphenation::SPEC,
     Justification: [justification::KIND] => justification::SPEC,
     BulletsAndNumbering: [bullets_numbering::KIND] => bullets_numbering::SPEC,
+    Ruby: [ruby::KIND] => ruby::SPEC,
     TateChuYokoSettings: [tate_chu_yoko::KIND] => tate_chu_yoko::SPEC,
     WarichuSettings: [warichu::KIND] => warichu::SPEC,
     CompositeFonts: [composite_fonts::KIND] => composite_fonts::SPEC,
