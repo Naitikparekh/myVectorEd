@@ -784,7 +784,10 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
             widgets::dim_label(ui, tl!("Mojikumi Set"));
             let sets = mojikumi_sets();
             let names = sets.map(|s| s.0);
+            // A custom set shows its name.
+            let custom = shared_para(app, |p| p.mojikumi_set.clone().filter(|_| p.mojikumi == Mojikumi::Custom).map(|m| m.name)).flatten();
             let current = shared_para(app, |p| p.mojikumi).and_then(|m| sets.iter().find(|s| s.1 == m).map(|s| s.0)).unwrap_or("");
+            let current = custom.as_deref().unwrap_or(current);
             // Already translated: shown as they are.
             if let Some(i) = widgets::dropdown_names(ui, "pa-mojikumi", current, &names, ui.available_width() - 4.0)
                 && let Some((_, _, key)) = sets.get(i)
@@ -797,7 +800,10 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
             widgets::dim_label(ui, tl!("Kinsoku Set"));
             let sets = [(tl!("None"), Kinsoku::None, "none"), (tl!("Hard"), Kinsoku::Hard, "hard"), (tl!("Soft"), Kinsoku::Soft, "soft")];
             let names = sets.map(|s| s.0);
+            // A custom set shows its name.
+            let custom = shared_para(app, |p| p.kinsoku_set.as_ref().map(|k| k.name.clone())).flatten();
             let current = shared_para(app, |p| p.kinsoku).and_then(|k| sets.iter().find(|s| s.1 == k).map(|s| s.0)).unwrap_or("");
+            let current = custom.as_deref().unwrap_or(current);
             // Already translated: shown as they are.
             if let Some(i) = widgets::dropdown_names(ui, "pa-kinsoku", current, &names, ui.available_width() - 4.0)
                 && let Some((_, _, key)) = sets.get(i)
@@ -884,6 +890,14 @@ pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {
         let (kinsoku_on, bunri) = bunri_kinshi_item(app);
         if menu_item(ui, tl!("Bunri-Kinshi"), has && kinsoku_on, bunri) {
             toggle_bunri_kinshi(app);
+        }
+        // Custom kinsoku and Mojikumi sets for the paragraphs.
+        for (label, cmd) in [(tl!("Kinsoku Shori Settings…"), "ui.kinsokuSettings"), (tl!("Mojikumi Settings…"), "ui.mojikumiSettings")] {
+            if menu_item(ui, label, has, false)
+                && let Err(e) = app.run(cmd, json!({}))
+            {
+                app.status(e);
+            }
         }
         // Korean lines break between any two syllables, not only between words.
         let anywhere = shared_para(app, |p| p.korean_line_break_anywhere) == Some(true);
