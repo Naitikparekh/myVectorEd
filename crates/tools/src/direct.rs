@@ -430,8 +430,25 @@ fn editable_path(n: &Node) -> Option<Cow<'_, PathData>> {
     match &n.kind {
         NodeKind::Path { path, .. } => Some(Cow::Borrowed(path)),
         NodeKind::Text(t) => t.area_frame().or_else(|| t.type_path()).map(Cow::Owned),
+        _ => envelope_top_path(n).map(Cow::Borrowed),
+    }
+}
+
+/// The shape's path of an envelope made with a top object, outside Edit Contents, whose anchors
+/// Direct Selection drags (`object.envelope.reshape`).
+fn envelope_top_path(n: &Node) -> Option<&PathData> {
+    match &n.kind {
+        NodeKind::Envelope { kind, editing: false, .. } => match &**kind {
+            vectorcraft_doc::EnvelopeKind::TopObject { path, .. } => Some(path),
+            _ => None,
+        },
         _ => None,
     }
+}
+
+/// Is `n` an envelope made with a top object whose shape Direct Selection reshapes?
+fn is_envelope_top(n: &Node) -> bool {
+    envelope_top_path(n).is_some()
 }
 
 /// The editable objects `f` accepts, topmost first.
@@ -486,7 +503,7 @@ fn line_end_leave(cx: &ToolContext, grab: Point) -> Option<Leave> {
 /// [`hovered_anchor`] marks it. In normal viewmode, an opaque fill in front occludes unselected
 /// objects behind it (#3405).
 fn hit_anchor(cx: &ToolContext, p: Point, tol: f64) -> Option<(NodeId, usize, usize, Point)> {
-    let mut owners = anchor_owners(cx, |n| matches!(n.kind, NodeKind::Path { .. }) || is_area_type(n) || is_path_type(n));
+    let mut owners = anchor_owners(cx, |n| matches!(n.kind, NodeKind::Path { .. }) || is_area_type(n) || is_path_type(n) || is_envelope_top(n));
     owners.sort_by_key(|id| !cx.selection.contains(*id));
 
     // 1. Check selected objects first. Selected objects are NEVER occluded (#1508).
@@ -946,15 +963,21 @@ impl Tool for DirectSelectionTool {
             (PointerKind::Drag, State::MoveObject { start, grab, hold, began, .. }) => self.drag_move_object(cx, ev, p, (start, grab, hold, began)),
             (PointerKind::Drag, State::TypeArea { items, start, began }) => {
                 let mut out = vec![];
-                let on_path = items.first().and_then(|(id, _)| cx.doc.node(*id)).is_some_and(is_path_type);
+                let first = items.first().and_then(|(id, _)| cx.doc.node(*id));
+                let (label, cmd) = if first.is_some_and(is_path_type) {
+                    ("Reshape Type Path", "text.reshapePath")
+                } else if first.is_some_and(is_envelope_top) {
+                    ("Reshape Envelope", "object.envelope.reshape")
+                } else {
+                    ("Reshape Type Area", "text.reshapeArea")
+                };
                 if !began {
                     if p.distance(start) < cx.tol(3.0) {
                         return out;
                     }
-                    out.push(Action::Begin(if on_path { "Reshape Type Path" } else { "Reshape Type Area" }.into()));
+                    out.push(Action::Begin(label.into()));
                 }
                 let d = move_delta(start, p, ev.mods.shift, cx.constrain_angle);
-                let cmd = if on_path { "text.reshapePath" } else { "text.reshapeArea" };
                 out.push(Action::Preview(cmd.into(), reshape_params(&items, d)));
                 self.state = State::TypeArea { items, start, began: true };
                 out
@@ -1193,7 +1216,9 @@ fn hovered_anchor_with_hit(cx: &ToolContext, p: Point, hit: Option<&Hit>) -> Opt
 fn frame_overlays(cx: &ToolContext, selected: &[(NodeId, Vec<AnchorRef>)]) -> Vec<Overlay> {
     let mut out = vec![];
     for id in &cx.selection.objects {
-        let Some(frame) = cx.doc.node(*id).filter(|n| is_area_type(n) || is_path_type(n)).and_then(editable_path) else { continue };
+        let Some(frame) = cx.doc.node(*id).filter(|n| is_area_type(n) || is_path_type(n) || is_envelope_top(n)).and_then(editable_path) else {
+            continue;
+        };
         let color = cx.doc.layer_color(*id);
         let picked = selected.iter().find(|(s, _)| s == id).map(|(_, v)| v.as_slice()).unwrap_or_default();
         out.extend(frame.anchors().map(|(si, ai, a)| Overlay::Anchor { p: a.p, color, filled: picked.contains(&(si, ai)), size: 5.0 }));
@@ -1351,7 +1376,7 @@ impl DirectSelectionTool {
         if cx.doc.node(id).is_some_and(is_area_type) {
             return self.press_frame_anchor(cx, id, (si, ai), p, ev.mods.shift);
         }
-        if cx.doc.node(id).is_some_and(is_path_type) {
+        if cx.doc.node(id).is_some_and(|n| is_path_type(n) || is_envelope_top(n)) {
             return self.press_type_area(cx, id, vec![(id, vec![(si, ai)])], p, ev.mods.shift);
         }
         // Alt picks the whole path (and Alt-drag copies it), as on a segment. On a path

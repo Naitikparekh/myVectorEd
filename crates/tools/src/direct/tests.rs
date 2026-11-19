@@ -2592,3 +2592,59 @@ fn outline_view_marquees_measure_clipped_art_by_the_plain_clipping_path() {
     let a = marquee(false);
     assert!(!selects(&a), "preview: {a:?}");
 }
+
+/// Direct Selection drags an anchor of an envelope made with a top object: the envelope is
+/// selected and the drag reshapes its shape (`object.envelope.reshape`), as the public page says:
+/// "Drag any anchor point on the envelope with the Direct Selection or Mesh tool"
+/// (<https://helpx.adobe.com/illustrator/desktop/manage-objects/reshape-transform-objects/distort-objects-with-envelopes.html>).
+/// During Edit Contents its anchors are not the envelope's to drag.
+#[test]
+fn dragging_an_anchor_of_a_top_object_envelope_reshapes_it() {
+    use std::sync::Arc;
+    use vectorcraft_doc::EnvelopeKind;
+    let make = |editing: bool| {
+        let (mut d, _) = doc_with_rect();
+        let l = d.layers[0].id;
+        let content = vectorcraft_doc::Node::path(
+            d.alloc_id(),
+            vectorcraft_geom::shapes::rectangle(Rect::new(320.0, 320.0, 380.0, 380.0)),
+            vectorcraft_doc::Appearance::default_art(),
+        );
+        let id = d.alloc_id();
+        let kind = EnvelopeKind::TopObject { path: vectorcraft_geom::shapes::rectangle(Rect::new(300.0, 300.0, 400.0, 400.0)), corners: None };
+        let env = vectorcraft_doc::Node::new(
+            id,
+            NodeKind::Envelope {
+                content: vec![Arc::new(content)],
+                kind: Box::new(kind),
+                fidelity: 50.0,
+                editing,
+                options: Default::default(),
+                frame: Default::default(),
+            },
+        );
+        d.insert(Some(l), 1, env).unwrap();
+        (d, id)
+    };
+    let (d, env) = make(false);
+    let p = paint();
+    let s = Selection::default();
+    let c = cx(&d, &s, &p);
+    let mut t = DirectSelectionTool::new(false);
+    assert_eq!(t.pointer(&c, &PointerEvent::new(PointerKind::Down, 400.5, 400.5)), vec![Action::Exec("select.set".into(), json!({"ids": [env.0]}))]);
+    let a = t.pointer(&c, &PointerEvent::new(PointerKind::Drag, 420.5, 440.5));
+    assert_eq!(a.first(), Some(&Action::Begin("Reshape Envelope".into())), "{a:?}");
+    let Some(Action::Preview(cmd, params)) = a.last() else { panic!("{a:?}") };
+    assert_eq!(cmd, "object.envelope.reshape");
+    assert_eq!((params["id"].clone(), params["dx"].clone(), params["dy"].clone()), (json!(env.0), json!(20.0), json!(40.0)), "{params}");
+    assert_eq!(params["anchors"].as_array().map(Vec::len), Some(1), "{params}");
+    assert_eq!(t.pointer(&c, &PointerEvent::new(PointerKind::Up, 420.5, 440.5)), vec![Action::Commit]);
+
+    // During Edit Contents, a press there does not reshape the envelope.
+    let (d, _) = make(true);
+    let c = cx(&d, &s, &p);
+    let mut t = DirectSelectionTool::new(false);
+    t.pointer(&c, &PointerEvent::new(PointerKind::Down, 400.5, 400.5));
+    let a = t.pointer(&c, &PointerEvent::new(PointerKind::Drag, 420.5, 440.5));
+    assert!(!a.iter().any(|x| matches!(x, Action::Preview(c, _) if c == "object.envelope.reshape")), "{a:?}");
+}

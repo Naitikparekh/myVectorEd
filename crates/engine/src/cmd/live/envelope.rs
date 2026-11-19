@@ -465,3 +465,48 @@ pub(super) fn env_set_mesh_point(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     ok()
 }
+
+/// `object.envelope.reshape`: move anchors of a Make with Top Object envelope's shape, with their
+/// handles, as Direct Selection drags them ("Drag any anchor point on the envelope with the Direct
+/// Selection or Mesh tool",
+/// <https://helpx.adobe.com/illustrator/desktop/manage-objects/reshape-transform-objects/distort-objects-with-envelopes.html>).
+/// The content follows the new shape; the corners keep their anchors.
+pub(super) fn env_reshape(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "object.envelope.reshape";
+    let id = object_param(p, "id", C)?.ok_or_else(|| bad(C, "missing `id`"))?;
+    let mut refs = super::super::select::checked_refs(p.get("anchors"), C)?;
+    refs.sort_unstable();
+    refs.dedup();
+    if refs.is_empty() {
+        return Err(bad(C, "missing anchors [[subpath, anchor]…]"));
+    }
+    let d = vectorcraft_geom::Vec2::new(f64_req(p, "dx", C)?, f64_req(p, "dy", C)?);
+    let top = |n: &Node| match &n.kind {
+        NodeKind::Envelope { kind, editing: false, .. } => match &**kind {
+            EnvelopeKind::TopObject { path, .. } => Some(path.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let mut path = s.doc()?.doc.node(id).and_then(top).ok_or_else(|| bad(C, "not an envelope made with a top object (outside Edit Contents)"))?;
+    for &(si, ai) in &refs {
+        let a = path.anchor_mut(si, ai).ok_or_else(|| bad(C, format!("no anchor [{si}, {ai}]")))?;
+        *a = a.transform(Affine::translate(d));
+    }
+    let within = path.bounds().is_some_and(|b| [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= crate::MAX_COORD));
+    if !within {
+        return Err(bad(C, "the envelope would reach past the canvas"));
+    }
+    // Anchors moved by no distance are no undo step.
+    if d.x == 0.0 && d.y == 0.0 {
+        return ok();
+    }
+    s.edit("Reshape Envelope", |doc, _| {
+        let Some(NodeKind::Envelope { kind, .. }) = doc.node_mut(id).map(|n| &mut n.kind) else { return Err(EngineError::NoNode(id)) };
+        if let EnvelopeKind::TopObject { path: p, .. } = &mut **kind {
+            *p = path;
+        }
+        Ok(())
+    })?;
+    ok()
+}

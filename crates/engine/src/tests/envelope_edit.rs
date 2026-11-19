@@ -395,3 +395,43 @@ fn reset_with_mesh_keeps_the_warp_shape_along_the_grid() {
         assert!(q.p.distance(*p) < 1e-9 && q.handles == *h);
     }
 }
+
+/// `object.envelope.reshape` moves anchors of a top-object envelope's shape, and the content
+/// follows; no distance is no undo step, undo puts the shape back, and other envelopes and Edit
+/// Contents are refused.
+#[test]
+fn reshaping_a_top_object_envelope_moves_its_anchors_and_the_content_follows() {
+    let mut s = session();
+    let a = id_of(&s.execute("shape.rectangle", &json!({"x": 120, "y": 120, "width": 160, "height": 60})).unwrap());
+    let top = id_of(&s.execute("shape.rectangle", &json!({"x": 100, "y": 100, "width": 200, "height": 100})).unwrap());
+    s.execute("select.set", &json!({"ids": [a.0, top.0]})).unwrap();
+    let e = id_of(&s.execute("object.envelope.makeWithTopObject", &json!({})).unwrap());
+    let shape = |s: &Session| match node(s, e).kind {
+        NodeKind::Envelope { kind, .. } => match *kind {
+            EnvelopeKind::TopObject { path, .. } => path,
+            k => panic!("{k:?}"),
+        },
+        k => panic!("{k:?}"),
+    };
+    let drawn = |s: &Session| node(s, e).visual_bounds().unwrap();
+    let before = (shape(&s), drawn(&s));
+    // The anchor at the bottom right corner.
+    let (si, ai, _) = before.0.anchors().find(|(_, _, an)| (an.p - Point::new(300.0, 200.0)).hypot() < 1e-6).unwrap();
+    let steps = s.doc().unwrap().history.undo.len();
+    s.execute("object.envelope.reshape", &json!({"id": e.0, "anchors": [[si, ai]], "dx": 0, "dy": 0})).unwrap();
+    assert_eq!(s.doc().unwrap().history.undo.len(), steps, "no distance, no undo step");
+    s.execute("object.envelope.reshape", &json!({"id": e.0, "anchors": [[si, ai]], "dx": 50, "dy": 40})).unwrap();
+    let moved = shape(&s).subpaths[si].anchors[ai].p;
+    assert!((moved - Point::new(350.0, 240.0)).hypot() < 1e-6, "{moved:?}");
+    assert!(drawn(&s).x1 > before.1.x1 + 10.0 && drawn(&s).y1 > before.1.y1 + 10.0, "the content follows: {:?} → {:?}", before.1, drawn(&s));
+    assert_eq!(s.doc().unwrap().history.undo.len(), steps + 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(shape(&s), before.0);
+    // A missing anchor, a mesh envelope and Edit Contents are refused.
+    assert!(s.execute("object.envelope.reshape", &json!({"id": e.0, "anchors": [[9, 9]], "dx": 1, "dy": 1})).is_err());
+    s.execute("select.set", &json!({"ids": [e.0]})).unwrap();
+    s.execute("object.envelope.editContents", &json!({"editing": true})).unwrap();
+    assert!(s.execute("object.envelope.reshape", &json!({"id": e.0, "anchors": [[si, ai]], "dx": 1, "dy": 1})).is_err());
+    let (_, m) = enveloped(&mut s, "object.envelope.makeWithMesh", json!({"rows": 1, "cols": 1}));
+    assert!(s.execute("object.envelope.reshape", &json!({"id": m.0, "anchors": [[0, 0]], "dx": 1, "dy": 1})).is_err());
+}

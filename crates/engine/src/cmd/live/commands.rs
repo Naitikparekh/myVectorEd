@@ -5,7 +5,7 @@ use super::blend::{
 use super::common::{has_blend, has_envelope, has_mesh};
 use super::envelope::{
     env_edit_contents, env_expand, env_info, env_make_mesh, env_make_top, env_make_warp, env_options, env_release, env_reset_mesh, env_reset_warp,
-    env_set_mesh_point,
+    env_reshape, env_set_mesh_point,
 };
 use super::mesh::{mesh_add_line, mesh_create, mesh_delete_point, mesh_expand, mesh_move_point, mesh_move_points, mesh_set_color};
 use super::{CommandSpec, always, cmd, has_doc, has_multi, has_selection};
@@ -247,6 +247,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id, index, x, y, handle?: 0 right|1 left|2 down|3 up} move a point of a mesh or warp envelope (its handles follow), or with `handle` place that handle end at (x, y); a warp's points are those of its grid (4×4 patches, or 8×8 or 16×16 where 4×4 draws more than 0.1% of its diagonal away from the warp), and its first edit makes it a mesh envelope on that grid in the same undo step (a warp no such grid follows is refused: Reset with Mesh first); object.mesh.movePoint, movePoints, addLine and deletePoint edit mesh and warp envelopes too",
             has_doc,
             env_set_mesh_point
+        ),
+        cmd!(
+            "object.envelope.reshape",
+            "Reshape Envelope",
+            [],
+            None,
+            "{id, anchors: [[subpath, anchor]…], dx, dy} move anchors of an envelope made with a top object (its shape's path), with their handles, by dx, dy points; the content follows the new shape (what Direct Selection does dragging an anchor of such an envelope); refused during Edit Contents; no undo step when dx and dy are both 0",
+            has_doc,
+            env_reshape
         ),
         // ---------- Gradient mesh ----------
         cmd!(
