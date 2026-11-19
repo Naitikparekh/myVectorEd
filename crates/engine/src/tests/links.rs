@@ -2491,7 +2491,10 @@ fn confined_svg_output_checks_the_images_drawn_for_pixel_effects() {
     write(&photo, &png(60, 30, RED));
     let mut s = session();
     let a = place(&mut s, &photo);
-    s.execute("effect.apply", &json!({"effect": "blur.radial", "ids": [a.0], "params": {"amount": 30, "quality": "draft"}})).unwrap();
+    // Applying an effect embeds a linked image; a document can still hold a linked one with an
+    // effect (saved so, or opened from another file), as here.
+    let blur = vectorcraft_render::effects::new_effect("blur.radial", &json!({"amount": 30, "quality": "draft"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc).node_mut(a).unwrap().appearance.effects.push(blur);
     without_pixels(&mut s, a);
     s.execute("select.set", &json!({"ids": [a.0]})).unwrap();
     s.execute("edit.copy", &json!({})).unwrap();
@@ -2533,7 +2536,7 @@ fn an_effect_on_a_linked_image_embeds_it_first() {
     let NodeKind::Image(im) = &n.kind else { panic!("still an image") };
     assert!(im.link.is_none(), "the image is embedded");
     assert_eq!(n.appearance.effects.len(), 1);
-    assert!(s.doc().unwrap().doc.images.get(&im.key).is_some(), "it keeps its pixels");
+    assert!(s.doc().unwrap().doc.images.contains_key(&im.key), "it keeps its pixels");
     assert_eq!(s.doc().unwrap().history.undo.len(), steps + 1, "one undo step");
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(image(&s, id).link.is_some(), "undo leaves it linked");
