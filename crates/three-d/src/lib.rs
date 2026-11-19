@@ -23,7 +23,7 @@ pub use lights::{Light, Lights, MAX_LIGHTS};
 mod material;
 pub use material::{MATERIAL_PRESETS, Material};
 mod trace;
-pub use trace::{MAX_TRACE_FACES, MAX_TRACE_PIXELS, TraceFace, TraceQuality, Traced, trace};
+pub use trace::{Decal, MAX_TRACE_FACES, MAX_TRACE_PIXELS, TraceFace, TraceQuality, Traced, trace};
 mod caps;
 mod mesh;
 pub use mesh::{Mesh, MeshedSolid, extrude_mesh, extrude_meshed, inflate_meshed, inflate_meshes, plane_mesh, revolve_mesh};

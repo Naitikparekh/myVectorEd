@@ -517,8 +517,12 @@ renderer):
   ([Shadows](#shadows)) stays a vector shape under the image. Wireframe mode wins over ray tracing.
 - Revolve is ray traced when the effect is on the object, or on a group or layer (every member's surface in one
   image, about the shared axis); a Revolve on a fill or stroke draws its vector faces. Revolve (Classic) is not
-  ray traced. The members' own opacity masks and blending modes do not apply to the image, and graphics are not
-  drawn in it.
+  ray traced. The members' own opacity masks and blending modes do not apply to the image.
+- Graphics ([Graphics](#graphics)) are painted into the image on the faces they lie on: a sample on a face takes the
+  color of the graphic's area that covers it (a solid color, or a gradient's middle color, at its opacity; patterns
+  are left out) before it is lit, so a graphic takes the face's light, material and shadows and is hidden exactly
+  where the face is. On Extrude & Bevel, Inflate and Rotate they go on the first fill's solid; on a Revolve group,
+  on the member with the longest profile, as drawn.
 
 ## Graphics
 
@@ -566,8 +570,8 @@ These rules are VectorCraft's own:
   longest outline (not round its holes), and on a group or layer on the first member's fill whose walls are built.
   Each wall and bevel facet turned toward the viewer draws the part that falls on it, right after the facet, cut
   and shaded as Revolve's parts are (below), so nearer facets cover it and it is not drawn on walls turned away.
-  A part shaded under a material takes the facet's light, not the material's highlight. Ray tracing
-  ([Ray tracing](#ray-tracing)) draws no graphics. The panel lists a side graphic as Front and shows no handle
+  A part shaded under a material takes the facet's light, not the material's highlight; ray traced
+  ([Ray tracing](#ray-tracing)), it takes the material too. The panel lists a side graphic as Front and shows no handle
   for it; X and Y move it.
 - On Inflate a graphic lies on the puffed front (its Front), placed as on a flat cap: X and Y are its center's
   offset from the center of the object's bounds in the plane of the art. Each piece of the front turned toward the
@@ -704,6 +708,7 @@ Release measurements and a repeatable CLI scene are in [3D lighting performance]
 
 | Date | Change |
 |---|---|
+| 2026-11-19 | Ray tracing paints graphics into the image on their faces (caps, Extrude & Bevel's sides, Inflate's front, Revolve's side), lit, shadowed and hidden with them ([Ray tracing](#ray-tracing)). |
 | 2026-11-19 | Ray tracing of Revolve, on an object or a group, with each face's smooth light; smoothly lit faces now take shadows in the traced image too ([Ray tracing](#ray-tracing)). |
 | 2026-11-19 | Graphics on Inflate: a front graphic follows the puffed front, cut into the pieces it covers and drawn right after each one, under white and colored lights; changing the type to Inflate keeps the front's graphics ([Graphics](#graphics)). |
 | 2026-11-19 | Graphics on Extrude & Bevel's sides: `face: "side"` maps a symbol onto the walls and bevels unrolled flat (X along the outline clockwise, Y along the depth toward the front), each facet drawing its part right after itself ([Graphics](#graphics)). |

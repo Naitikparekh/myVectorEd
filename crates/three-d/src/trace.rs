@@ -7,7 +7,7 @@
 //! [Render 3D vector artwork](https://helpx.adobe.com/illustrator/desktop/special-effects-styles/create-3d-graphics/render-3d-vector-artwork.html)
 //! page; it traces direct light only (no reflections between faces).
 
-use vectorcraft_geom::{Point, Rect};
+use vectorcraft_geom::{BezPath, Point, Rect, Shape};
 
 use crate::{Facet, Material, V3, View};
 
@@ -21,6 +21,46 @@ pub struct TraceFace<'a> {
     pub alpha: f64,
     pub material: Material,
     pub smooth: bool,
+    /// Art drawn on the facet (graphics mapped onto it), in drawing order: a sample on the facet
+    /// that a decal covers takes the decal's color before it is lit.
+    pub decals: &'a [Decal],
+}
+
+/// A filled area drawn on a facet's surface, on the page: a part of a graphic mapped onto it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decal {
+    path: BezPath,
+    even_odd: bool,
+    color: [f64; 3],
+    alpha: f64,
+    bounds: Rect,
+}
+
+impl Decal {
+    /// The area `path` fills (with the even-odd rule when `even_odd`, else nonzero) in `color`
+    /// (0..1 RGB) at `alpha`. `None` for a path with no finite bounds.
+    pub fn new(path: BezPath, even_odd: bool, color: [f64; 3], alpha: f64) -> Option<Self> {
+        let bounds = path.bounding_box();
+        if ![bounds.x0, bounds.y0, bounds.x1, bounds.y1].iter().all(|v| v.is_finite()) || path.elements().is_empty() {
+            return None;
+        }
+        let color = color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
+        let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 0.0 };
+        Some(Self { path, even_odd, color, alpha, bounds })
+    }
+
+    fn covers(&self, p: Point) -> bool {
+        if !self.bounds.contains(p) {
+            return false;
+        }
+        let w = self.path.winding(p);
+        if self.even_odd { w % 2 != 0 } else { w != 0 }
+    }
+}
+
+/// The color of `face`'s paint at `p` with the decals that cover it painted over it, in order.
+fn painted(face: &TraceFace, p: Point) -> [f64; 3] {
+    face.decals.iter().filter(|d| d.covers(p)).fold(face.color, |c, d| std::array::from_fn(|k| d.color[k] * d.alpha + c[k] * (1.0 - d.alpha)))
 }
 
 /// How finely a render samples the facets.
@@ -343,6 +383,7 @@ pub fn trace(faces: &[TraceFace], view: &View, quality: TraceQuality) -> Option<
                     let Some((i, _)) = nearest(&prepared, &grid, p) else { continue };
                     let Some(f) = prepared.get(i) else { continue };
                     let face = f.face;
+                    let color = painted(&face, p);
                     for (v, rays) in visibility.iter_mut().zip(&rays) {
                         *v = 1.0;
                         if shadows_on && let Some(from) = view_point(face.facet, p) {
@@ -363,9 +404,9 @@ pub fn trace(faces: &[TraceFace], view: &View, quality: TraceQuality) -> Option<
                                 *lc = (*lc - blocked * light.color.get(c).copied().unwrap_or(1.0)).clamp(0.0, 1.0);
                             }
                         }
-                        std::array::from_fn(|c| face.color[c] * l[c])
+                        std::array::from_fn(|c| color[c] * l[c])
                     } else {
-                        face.material.shade_lit(view, face.facet.normal, face.color, &visibility)
+                        face.material.shade_lit(view, face.facet.normal, color, &visibility)
                     };
                     let a = face.alpha.clamp(0.0, 1.0);
                     for c in 0..3 {
@@ -415,7 +456,7 @@ mod tests {
     const MATTE: Material = Material { base: None, roughness: 1.0, metallic: 0.0 };
 
     fn faces(facets: &[Facet]) -> Vec<TraceFace<'_>> {
-        facets.iter().map(|facet| TraceFace { facet, color: [0.8, 0.2, 0.1], alpha: 1.0, material: MATTE, smooth: false }).collect()
+        facets.iter().map(|facet| TraceFace { facet, color: [0.8, 0.2, 0.1], alpha: 1.0, material: MATTE, smooth: false, decals: &[] }).collect()
     }
 
     fn pixel(t: &Traced, p: Point) -> [u8; 4] {
@@ -533,7 +574,7 @@ mod tests {
             })
             .collect();
         let faces: Vec<TraceFace> =
-            smooth.iter().map(|facet| TraceFace { facet, color: [0.8, 0.2, 0.1], alpha: 1.0, material: MATTE, smooth: true }).collect();
+            smooth.iter().map(|facet| TraceFace { facet, color: [0.8, 0.2, 0.1], alpha: 1.0, material: MATTE, smooth: true, decals: &[] }).collect();
         let t = trace(&faces, &view, TraceQuality::Low).unwrap();
         let near = row(&t, 24.0).unwrap();
         let far = row(&t, 95.0).unwrap();
@@ -546,5 +587,36 @@ mod tests {
         let cone = cone(V3(0.0, 0.0, 1.0), 0.3, 9);
         assert_eq!(cone.len(), 9);
         assert!(cone.iter().all(|v| (v.dot(*v) - 1.0).abs() < 1e-9 && v.2 > 0.9));
+    }
+
+    #[test]
+    fn a_decal_paints_its_facet_where_it_covers_it_and_is_lit_with_it() {
+        let view = View { light_rotation: 0.0, light_height: 90.0, light_intensity: 1.0, ..front() };
+        let facets = crate::plane(&square(100.0, 100.0, 50.0), FillRule::NonZero, Rect::new(100.0, 100.0, 150.0, 150.0), view).unwrap();
+        let mut b = BezPath::new();
+        b.move_to((110.0, 110.0));
+        b.line_to((120.0, 110.0));
+        b.line_to((120.0, 120.0));
+        b.line_to((110.0, 120.0));
+        b.close_path();
+        let decals = [Decal::new(b, false, [0.0, 0.0, 1.0], 1.0).unwrap()];
+        let faces: Vec<TraceFace> = facets
+            .iter()
+            .map(|facet| TraceFace { facet, color: [0.8, 0.2, 0.1], alpha: 1.0, material: MATTE, smooth: false, decals: &decals })
+            .collect();
+        let t = trace(&faces, &view, TraceQuality::Low).unwrap();
+        assert_eq!(pixel(&t, Point::new(115.0, 115.0)), [0, 0, 255, 255], "the decal's blue, fully lit");
+        let paint = pixel(&t, Point::new(140.0, 140.0));
+        assert!(paint[0] > 200 && paint[2] < 40, "the face's own paint outside it: {paint:?}");
+        // Half transparent, it mixes with the paint underneath.
+        let half = [Decal::new(decals[0].path.clone(), false, [0.0, 0.0, 1.0], 0.5).unwrap()];
+        let faces: Vec<TraceFace> = facets
+            .iter()
+            .map(|facet| TraceFace { facet, color: [0.8, 0.2, 0.1], alpha: 1.0, material: MATTE, smooth: false, decals: &half })
+            .collect();
+        let t = trace(&faces, &view, TraceQuality::Low).unwrap();
+        let mixed = pixel(&t, Point::new(115.0, 115.0));
+        assert!(mixed[0].abs_diff(102) <= 1 && mixed[1].abs_diff(26) <= 1 && mixed[2].abs_diff(140) <= 1, "{mixed:?}");
+        assert!(Decal::new(BezPath::new(), false, [1.0; 3], 1.0).is_none());
     }
 }

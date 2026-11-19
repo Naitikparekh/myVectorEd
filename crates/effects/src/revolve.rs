@@ -949,12 +949,13 @@ fn art(doc: Option<&Document>, n: &Node, expand: bool) -> Option<Node> {
         let paints = solid_paints(n);
         let item = surface_item(&paints)?;
         let expand = expand && !n.appearance.effects.iter().skip(index + 1).any(|e| e.visible && is_geometry(&e.id));
-        let traced = crate::solids::traced::RevolveSurface { path: &path, options: rule_options(fx, rule), item, member: 1.0 };
+        let graphics = !crate::solids::mapped_graphics(&merged_params(&fx.id, &fx.params)).is_empty();
+        let traced = crate::solids::traced::RevolveSurface { path: &path, options: rule_options(fx, rule), item, member: 1.0, graphics };
         if crate::solids::renders_wireframe(fx) {
             // In wireframe mode the edges of the faces, with no shadow.
             children.push(wire_art(n.id, [(&path, rule)], path.bounds()?, fx, fx_options(fx))?);
         } else if let Some(b) = path.bounds()
-            && let Some(image) = crate::solids::traced::revolve_traced(n.id, fx, std::slice::from_ref(&traced), b)
+            && let Some(image) = crate::solids::traced::revolve_traced(doc, n.id, fx, std::slice::from_ref(&traced), b)
         {
             // Ray traced: one image of the surface over its shadow.
             if let Some(shadow) = shadow_of(n.id, fx, &path, item, b, rule_options(fx, rule), None).ok()? {
@@ -1154,19 +1155,28 @@ fn group_art(doc: Option<&Document>, n: &Node, expand: bool) -> Option<Node> {
         art.appearance = Appearance { effects: past_effect(&n.appearance.effects, index), ..Default::default() }.into();
         return Some(art);
     }
-    // Ray traced: one image of every member's surface over the shadow they cast.
+    // Ray traced: one image of every member's surface over the shadow they cast, the graphics on
+    // the side of the member with the longest profile, as drawn.
+    let mapped = fx.id == REVOLVE && !crate::solids::mapped_graphics(&merged_params(&fx.id, &fx.params)).is_empty();
+    let longest = if mapped && crate::solids::traced::ray_traced(&fx.id, &merged_params(&fx.id, &fx.params)).is_some() {
+        graphics_member(&shapes, b, options)
+    } else {
+        None
+    };
     let traced: Vec<crate::solids::traced::RevolveSurface> = shapes
         .iter()
-        .filter_map(|s| {
+        .enumerate()
+        .filter_map(|(k, s)| {
             Some(crate::solids::traced::RevolveSurface {
                 path: &s.path,
                 options: Revolve { fill_rule: s.rule, ..options },
                 item: surface_item(&s.items)?,
                 member: s.opacity,
+                graphics: longest == Some(k),
             })
         })
         .collect();
-    if let Some(image) = crate::solids::traced::revolve_traced(n.id, fx, &traced, b) {
+    if let Some(image) = crate::solids::traced::revolve_traced(doc, n.id, fx, &traced, b) {
         let mut children = group_shadow(n.id, fx, &shapes, b, options, vec![]).ok()?;
         children.push(image);
         let mut art = n.clone();
