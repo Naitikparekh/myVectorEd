@@ -16,6 +16,10 @@ use crate::heap::{Class, ENUMERABLE, Func, Key, OBJECT_BYTES, ObjId, Object, PRO
 use crate::interp::{Abrupt, ErrorType, Interp, JsResult};
 use crate::value::{Value, index_key};
 
+/// The hidden, read-only properties that keep a host object's class and id ([`HostRef`]).
+const HOST_CLASS: &str = "__vcHostClass";
+const HOST_ID: &str = "__vcHostId";
+
 /// A value that crosses between a script and the host.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Data {
@@ -27,6 +31,55 @@ pub enum Data {
     Array(Vec<Data>),
     /// An object's own enumerable properties, in the order the object lists them.
     Object(Vec<(String, Data)>),
+    /// An object of a host class ([`crate::Realm::define_host_class`]) that stands for something
+    /// the host keeps, such as an item of a document.
+    Host(HostRef),
+}
+
+/// What a host object stands for: its class and the host's id for it. An object made from a
+/// reference with `items` is also a list: it has those items at indices 0, 1, … and a `length`,
+/// none of them writable. A script gets a new object each time the host gives a reference, so two
+/// objects for one thing are not `===`; the host compares them by id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostRef {
+    pub class: String,
+    pub id: String,
+    pub items: Option<Vec<Data>>,
+}
+
+impl HostRef {
+    /// A reference without items.
+    pub fn new(class: impl Into<String>, id: impl Into<String>) -> Self {
+        Self { class: class.into(), id: id.into(), items: None }
+    }
+
+    /// A reference that is also a list of `items`.
+    pub fn list(class: impl Into<String>, id: impl Into<String>, items: Vec<Data>) -> Self {
+        Self { class: class.into(), id: id.into(), items: Some(items) }
+    }
+}
+
+/// A property of a host class: `get` is given the object, and `set`, without which the property
+/// is read-only, the object and the value assigned.
+#[derive(Clone)]
+pub struct HostProperty {
+    pub name: String,
+    pub get: HostFunction,
+    pub set: Option<HostFunction>,
+}
+
+/// A class of host objects ([`crate::Realm::define_host_class`]): a global constructor `name`
+/// whose prototype has the properties and methods. A method is given the object (or
+/// [`Data::Undefined`] when called on something that is not one of the host's objects) and then
+/// its arguments. With `constructor`, `new Name(…)` and `Name(…)` call it with the arguments and
+/// give its result; a plain object result gets the class's prototype, so `instanceof` holds.
+/// Without it, the constructor throws a `TypeError`.
+#[derive(Clone)]
+pub struct HostClass {
+    pub name: String,
+    pub properties: Vec<HostProperty>,
+    pub methods: Vec<(String, HostFunction)>,
+    pub constructor: Option<HostFunction>,
 }
 
 /// How much one crossing may carry.
@@ -113,6 +166,12 @@ pub(crate) enum ArgRead {
     Each(Rc<[Arg]>),
     /// None: the function is given the [`CallSite`] of the code that calls it, as three numbers.
     Site,
+    /// The `this` value as a [`Data::Host`] (or [`Data::Undefined`] for any other value), then
+    /// each argument as [`Data`].
+    This,
+    /// Each as [`Data`]; the function is a host class's constructor, and an object result gets
+    /// the prototype its `prototype` property holds.
+    Construct,
 }
 
 /// A member of an object the host adds to the global environment.
@@ -254,6 +313,9 @@ impl Interp {
         if r.ancestors.len() >= r.limits.depth {
             return Err(self.data_error(r, ErrorType::Range, "is nested too deep"));
         }
+        if let Some(r) = self.host_ref(id) {
+            return Ok(Data::Host(r));
+        }
         let shape = match &self.object(id)?.class {
             Class::Array { length, .. } => Shape::Array(*length),
             Class::Ordinary => {
@@ -338,7 +400,54 @@ impl Interp {
                 self.write_container(items.into_iter().enumerate().map(|(i, d)| (Slot::Index(i), d)).collect(), true, depth, frozen)?
             }
             Data::Object(items) => self.write_container(items.into_iter().map(|(k, d)| (Slot::Name(k), d)).collect(), false, depth, frozen)?,
+            Data::Host(r) => self.write_host_ref(r, depth)?,
         })
+    }
+
+    /// The host reference object `id` stands for, when it is one ([`Data::Host`]).
+    pub(crate) fn host_ref(&self, id: ObjId) -> Option<HostRef> {
+        let o = self.heap.object(id)?;
+        if !matches!(o.class, Class::Ordinary) {
+            return None;
+        }
+        let text = |name: &str| match o.props.get(&key(name)) {
+            Some(Prop::Data { value: Value::String(s), flags: 0 }) => Some(s.to_rust_string()),
+            _ => None,
+        };
+        Some(HostRef { class: text(HOST_CLASS)?, id: text(HOST_ID)?, items: None })
+    }
+
+    /// A new object for `r`, with its class's prototype.
+    fn write_host_ref(&mut self, r: HostRef, depth: usize) -> JsResult<Value> {
+        let proto = self.host_classes.iter().find(|(name, _)| **name == *r.class).map_or(self.intrinsics.object_proto, |&(_, p)| p);
+        let count = r.items.as_ref().map_or(0, Vec::len);
+        if count > self.data_limits.entries {
+            return Err(self.throw(ErrorType::Range, "a host value has too many entries"));
+        }
+        let text_bytes = string_bytes(r.class.encode_utf16().count()).saturating_add(string_bytes(r.id.encode_utf16().count()));
+        self.reserve_heap(OBJECT_BYTES.saturating_add(PROP_BYTES.saturating_mul(count.saturating_add(3))).saturating_add(text_bytes))?;
+        self.heap.bytes = self.heap.bytes.saturating_add(text_bytes);
+        let id = self.heap.alloc_object(Object::new(Class::Ordinary, Some(proto)));
+        let mark = self.temp_roots.len();
+        self.temp_roots.push(Value::Object(id));
+        let mut result = self
+            .define(id, key(HOST_CLASS), Prop::Data { value: Value::str(&r.class), flags: 0 })
+            .and_then(|()| self.define(id, key(HOST_ID), Prop::Data { value: Value::str(&r.id), flags: 0 }));
+        if let (Ok(()), Some(items)) = (&result, r.items) {
+            for (i, d) in items.into_iter().enumerate() {
+                let k = index_key(u32::try_from(i).unwrap_or(u32::MAX));
+                result = self.write_data(d, depth + 1, false).and_then(|value| self.define(id, k, Prop::Data { value, flags: ENUMERABLE }));
+                if result.is_err() {
+                    break;
+                }
+            }
+            if result.is_ok() {
+                result = self.define(id, key("length"), Prop::Data { value: Value::Number(count as f64), flags: 0 });
+            }
+        }
+        self.temp_roots.truncate(mark);
+        result?;
+        Ok(Value::Object(id))
     }
 
     fn write_container(&mut self, items: Vec<(Slot, Data)>, array: bool, depth: usize, frozen: bool) -> JsResult<Value> {
@@ -376,9 +485,15 @@ impl Interp {
 
     /// Calls host function `f`: reads its arguments as `how` says, runs it, and gives its result to
     /// the script.
-    pub(crate) fn call_data(&mut self, f: &crate::heap::DataFn, name: &Rc<str>, args: &[Value], how: &ArgRead) -> JsResult<Value> {
+    pub(crate) fn call_data(&mut self, f: &crate::heap::DataFn, name: &Rc<str>, this: &Value, args: &[Value], how: &ArgRead) -> JsResult<Value> {
         let data = match how {
             ArgRead::Site => site_data(self.call_site()),
+            ArgRead::This => {
+                let first = this.as_object().and_then(|o| self.host_ref(o)).map_or(Data::Undefined, Data::Host);
+                let mut data = vec![first];
+                data.extend(self.read_args(name, args, how)?);
+                data
+            }
             _ => self.read_args(name, args, how)?,
         };
         // Only the script's own code, in a run that can pause, can wait for a result.
@@ -470,14 +585,14 @@ impl Interp {
         let mut data = Vec::with_capacity(args.len());
         // A conversion can run the script's own `toString`, which may collect garbage.
         let mark = self.temp_roots.len();
-        if !matches!(how, ArgRead::Data | ArgRead::Frozen) {
+        if !matches!(how, ArgRead::Data | ArgRead::Frozen | ArgRead::This | ArgRead::Construct) {
             self.temp_roots.extend(args.iter().cloned());
         }
         let mut read = Ok(());
         for (i, a) in args.iter().enumerate() {
             reading.path.push(Step::Index(u32::try_from(i).unwrap_or(u32::MAX)));
             let d = match how {
-                ArgRead::Data | ArgRead::Frozen | ArgRead::Site => self.read_data(a, &mut reading),
+                ArgRead::Data | ArgRead::Frozen | ArgRead::Site | ArgRead::This | ArgRead::Construct => self.read_data(a, &mut reading),
                 ArgRead::Text => self.read_text(a, &mut reading),
                 ArgRead::Each(list) => match list.get(i) {
                     Some(Arg::TextOrUndefined) if matches!(a, Value::Undefined) => Ok(Data::Undefined),
@@ -604,6 +719,69 @@ impl Interp {
         let o = self.host_function(f, name, ArgRead::Each(args.into()));
         let global = self.global;
         self.define(global, key(name), Prop::Data { value: Value::Object(o), flags: crate::heap::HIDDEN })
+    }
+
+    /// Adds host class `class` ([`crate::Realm::define_host_class`]); defining a name again
+    /// replaces the earlier class for references made after it.
+    pub(crate) fn install_host_class(&mut self, class: HostClass) -> JsResult<()> {
+        let object_proto = self.intrinsics.object_proto;
+        self.reserve_heap(2 * OBJECT_BYTES)?;
+        let proto = self.heap.alloc_object(Object::new(Class::Ordinary, Some(object_proto)));
+        let mark = self.temp_roots.len();
+        self.temp_roots.push(Value::Object(proto));
+        let r = self.fill_host_class(proto, class);
+        self.temp_roots.truncate(mark);
+        r
+    }
+
+    fn fill_host_class(&mut self, proto: ObjId, class: HostClass) -> JsResult<()> {
+        let HostClass { name, properties, methods, constructor } = class;
+        for p in properties {
+            let full = format!("{name}.{}", p.name);
+            let get = Some(self.host_function(p.get, &full, ArgRead::This));
+            let set = p.set.map(|f| self.host_function(f, &full, ArgRead::This));
+            self.define(proto, key(&p.name), Prop::Accessor { get, set, flags: crate::heap::CONFIGURABLE })?;
+        }
+        for (method, f) in methods {
+            let full = format!("{name}.{method}");
+            let m = self.host_function(f, &full, ArgRead::This);
+            self.define(proto, key(&method), Prop::Data { value: Value::Object(m), flags: crate::heap::HIDDEN })?;
+        }
+        let made: HostFunction = match constructor {
+            Some(f) => f,
+            None => {
+                let message = format!("{name} cannot be made by a script");
+                Rc::new(move |_| Err(HostError::Type(message.clone())))
+            }
+        };
+        let ctor = self.host_function(made, &name, ArgRead::Construct);
+        self.define(ctor, key("prototype"), Prop::Data { value: Value::Object(proto), flags: 0 })?;
+        self.define(proto, key("constructor"), Prop::Data { value: Value::Object(ctor), flags: crate::heap::HIDDEN })?;
+        let global = self.global;
+        self.define(global, key(&name), Prop::Data { value: Value::Object(ctor), flags: crate::heap::HIDDEN })?;
+        let name: Rc<str> = name.into();
+        self.host_classes.retain(|(n, _)| *n != name);
+        self.host_classes.push((name, proto));
+        Ok(())
+    }
+
+    /// Calls the constructor of a host class, `callee`, whose function is `f`: an ordinary object
+    /// result that is not a host reference gets the prototype `callee.prototype` holds.
+    pub(crate) fn construct_host(&mut self, callee: &Value, f: &crate::heap::DataFn, name: &Rc<str>, args: &[Value]) -> JsResult<Value> {
+        let v = self.call_data(f, name, &Value::Undefined, args, &ArgRead::Construct)?;
+        let (Some(o), Some(c)) = (v.as_object(), callee.as_object()) else { return Ok(v) };
+        if self.host_ref(o).is_some() {
+            return Ok(v);
+        }
+        let proto = match self.heap.object(c).and_then(|c| c.props.get(&key("prototype"))) {
+            Some(Prop::Data { value: Value::Object(p), .. }) => *p,
+            _ => return Ok(v),
+        };
+        let obj = self.object_mut(o)?;
+        if matches!(obj.class, Class::Ordinary) {
+            obj.proto = Some(proto);
+        }
+        Ok(v)
     }
 
     fn host_function(&mut self, f: HostFunction, name: &str, read: ArgRead) -> ObjId {
