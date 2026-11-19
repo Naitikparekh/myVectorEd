@@ -111,7 +111,7 @@ fn bakes_members(n: &Node) -> bool {
 /// Whether `n` may be written with an art style ([`styled_objects`]).
 fn candidate(n: &Node) -> bool {
     let brushed = brushed(n) && matches!(n.kind, NodeKind::Path { .. } | NodeKind::Compound { .. });
-    let styled = !n.appearance.effects.is_empty() || n.extras().graphic_style.is_some() || brushed || stacked(n);
+    let styled = !n.appearance.effects.is_empty() || n.extras().graphic_style.is_some() || brushed || stacked(n) || styled_type(n);
     if !styled || n.knockout_shape {
         return false;
     }
@@ -120,8 +120,30 @@ fn candidate(n: &Node) -> bool {
         NodeKind::Compound { .. } => has_points(&compound_path(n)),
         NodeKind::Group { children, clip: false } => !n.is_compound_shape() && children.iter().all(|c| plain_member(c)),
         NodeKind::Image(_) => warped_image(n),
+        NodeKind::Text(_) => styled_type(n),
         _ => false,
     }
+}
+
+/// Is `n` type with fills, strokes or effects of its own that its art style may hold: the reader
+/// reads a text object on `%_` lines after its drawn look with the style (`read::ops`' `styled`, on
+/// the object's text slot). Its fills and strokes paint in solid colours without a brush, and no
+/// effect is a Warp, Distort & Transform or Blur effect (warped type is checked against its look,
+/// and those effects are written only in the Graphic Styles panel's styles). The type itself must be
+/// one the text document holds as it is, without wrap shapes and an opacity mask.
+fn styled_type(n: &Node) -> bool {
+    let NodeKind::Text(t) = &n.kind else { return false };
+    let ap = &n.appearance;
+    let painting = || ap.items.iter().filter(|i| !i.paint().is_none());
+    let own = painting().next().is_some() || !ap.effects.is_empty();
+    let held = painting().all(|i| match i {
+        AppearanceItem::Fill(f) => matches!(f.paint, Paint::Solid { .. }),
+        AppearanceItem::Stroke(s) => matches!(s.paint, Paint::Solid { .. }) && s.brush.is_none(),
+    });
+    let effects = ap.effects.iter().chain(ap.items.iter().flat_map(|i| i.effects().iter()));
+    let mut bare = n.clone();
+    bare.appearance = Appearance::default().into();
+    own && held && !effects.clone().any(panel_only) && n.extras().mask.is_none() && t.wrap.is_empty() && super::texts::holds(&bare, t, false)
 }
 
 /// Is `n` an image, embedded or linked, without an opacity mask whose appearance is one Warp, with
@@ -723,6 +745,14 @@ impl Writer<'_> {
     /// either. A gradient fill is placed on `n`'s outline, as the object draws it. A style of its own
     /// that isn't written leaves no gradient definition or warning behind.
     pub(super) fn object_style(&mut self, n: &Node, orig: &Node) -> Option<String> {
+        // Type is written as type only on the layers, and a frame of a thread names its thread's
+        // story: such type keeps its outlines.
+        let typed = styled_type(orig);
+        if matches!(orig.kind, NodeKind::Text(_))
+            && (!typed || self.mask_level.is_some() || self.hidden > 0 || self.doc.text_threads.iter().any(|th| th.contains(&orig.id)))
+        {
+            return None;
+        }
         if let NodeKind::Group { children, .. } = &orig.kind
             && bakes_members(orig)
             && !children.iter().all(|c| self.member_keeps_outline(c))
@@ -743,7 +773,9 @@ impl Writer<'_> {
         let brushed = brushed(orig);
         // A stack of fills and strokes may have their own opacity and blending modes.
         let stack = stacked(orig) && !orig.appearance.effects.iter().any(panel_only);
-        if (orig.appearance.effects.is_empty() && !brushed && !stack) || !(own_style_holds(&orig.appearance) || warped_image(orig) || stack) {
+        if (orig.appearance.effects.is_empty() && !brushed && !stack && !typed)
+            || !(own_style_holds(&orig.appearance) || warped_image(orig) || stack || typed)
+        {
             return None;
         }
         let graded = orig.appearance.items.iter().any(|i| matches!(i.paint(), Paint::Gradient(_)));
@@ -811,6 +843,7 @@ impl Writer<'_> {
             NodeKind::Path { path, .. } => super::object_count(path.subpaths.iter().filter(|sp| !sp.anchors.is_empty()).count()),
             NodeKind::Compound { .. } => super::object_count(compound_path(orig).subpaths.iter().filter(|sp| !sp.anchors.is_empty()).count()),
             NodeKind::Group { .. } | NodeKind::Image(_) => 1,
+            // Type counts its own objects as it is written.
             _ => 0,
         };
         if !self.take_objects(1 + own) {
@@ -842,6 +875,8 @@ impl Writer<'_> {
                     self.node(&c);
                 }
             }
+            // Type's look is what its style draws, as outlines.
+            NodeKind::Text(_) => self.outlined_text(&look, Xy::of(&look)),
             _ => self.node(&look),
         }
         self.line("U");
@@ -877,6 +912,15 @@ impl Writer<'_> {
                     self.node(c);
                 }
                 self.line("U");
+            }
+            // Type as a text object naming its story, without its own fills, strokes and
+            // effects, which the style holds.
+            NodeKind::Text(_) => {
+                let mut bare = orig.clone();
+                bare.appearance = Appearance::default().into();
+                let was = std::mem::replace(&mut self.styled_type, true);
+                self.text(&bare, xy);
+                self.styled_type = was;
             }
             _ => {}
         }
@@ -1007,6 +1051,11 @@ fn object_reads(n: &Node, text: &str) -> bool {
     let Some(mut read) = crate::import::read_stacked_art_style(section.as_bytes(), "x", &own) else { return false };
     let group = matches!(n.kind, NodeKind::Group { .. });
     let image = matches!(n.kind, NodeKind::Image(_));
+    // Type is read on its text slot with any plain style (read back at all) but Pathfinder
+    // effects, its contents where the style puts them.
+    if matches!(n.kind, NodeKind::Text(_)) {
+        return !read.pathfinder && same_appearance(&read.appearance, &n.appearance);
+    }
     if (image && !(read.image_warp && warped_image(n)))
         // A path or compound path is also read with a stack of fills and strokes.
         || (!image && !read.simple && !(read.stacked && !group))
