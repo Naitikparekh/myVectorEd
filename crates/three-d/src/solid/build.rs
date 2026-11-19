@@ -339,6 +339,21 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Give the facet that [`Builder::face`] or [`Builder::smooth_triangle`] added, when it added one
+    /// after `before` facets with one contour of as many points as `uv`, where those points lie on
+    /// the surface graphics are mapped onto ([`Facet::surface`]).
+    pub(super) fn surface(&mut self, before: usize, uv: Vec<Point>) {
+        if !self.draw || self.facets.len() <= before {
+            return;
+        }
+        if let Some(f) = self.facets.last_mut()
+            && let [page] = f.contours.as_slice()
+            && page.len() == uv.len()
+        {
+            f.surface = Some(crate::SurfaceCell { page: page.clone(), uv, outward: !f.away });
+        }
+    }
+
     /// How many faces the builder holds: facets, or without them the faces kept for a mesh.
     pub(super) fn len(&self) -> usize {
         match &self.mesh {
