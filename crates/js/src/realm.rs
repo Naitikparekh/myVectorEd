@@ -465,6 +465,17 @@ impl Realm {
         }
     }
 
+    /// Adds host class `class`: a global constructor whose prototype has the class's properties
+    /// and methods, each a host function given the object it is called on ([`crate::HostClass`]).
+    /// A [`crate::Data::Host`] of that class the host gives a script becomes an object with this
+    /// prototype, and such an object passed back reaches the host as the same reference.
+    pub fn define_host_class(&mut self, class: crate::HostClass) -> Result<(), RunError> {
+        match self.interp.install_host_class(class) {
+            Ok(()) => Ok(()),
+            Err(e) => self.outcome(Err(e)).map(drop),
+        }
+    }
+
     /// Adds the global constructors `File` and `Folder`, whose file system work the host functions
     /// in `items` do: `parse`, `relative`, `tempName`, `stat`, `open`, `close`, `read`, `readln`,
     /// `readch`, `seek`, `tell`, `eof`, `encoding`, `setEncoding`, `list`, `resolve`, `execute`,

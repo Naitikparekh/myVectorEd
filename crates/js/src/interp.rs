@@ -202,6 +202,8 @@ pub(crate) struct Interp {
     pub(crate) install_error: Option<String>,
     /// `File` and `Folder`, once a host has added them ([`crate::Realm::define_file_classes`]).
     pub(crate) files: Option<crate::file_classes::Classes>,
+    /// The prototypes of the host classes ([`crate::Realm::define_host_class`]), by name.
+    pub(crate) host_classes: Vec<(Rc<str>, ObjId)>,
     /// The clock and time zone `Date` reads.
     pub(crate) date_host: crate::date_builtins::DateHost,
     /// The bytes native code holds outside the heap's cells through [`HeldBytes`].
@@ -461,6 +463,7 @@ impl Interp {
             held_bytes: 0,
             install_error: None,
             files: None,
+            host_classes: Vec::new(),
             date_host: crate::date_builtins::DateHost::default(),
             held: Rc::default(),
             flattened: std::cell::Cell::new(0),
@@ -695,6 +698,7 @@ impl Interp {
         roots.objects.push(self.global);
         roots.objects.extend(self.intrinsics.all());
         roots.objects.extend(self.files.iter().flat_map(crate::file_classes::Classes::objects));
+        roots.objects.extend(self.host_classes.iter().map(|&(_, p)| p));
         roots.envs.push(self.global_env);
         self.heap.collect(&roots);
         // The collection counts the live total again, so bytes already released are not in it.
@@ -2162,10 +2166,13 @@ impl Interp {
                     self.temp_roots.truncate(mark);
                     return Ok(Prepared::Done(r?));
                 }
+                Func::Data { f: data, name, read: crate::host::ArgRead::Construct } => {
+                    return Ok(Prepared::Done(self.construct_host(&f, &data, &name, &args)?));
+                }
                 Func::Data { f, name, read } => {
                     // The arguments are read before the function runs, and a result being built
                     // keeps itself reachable.
-                    return Ok(Prepared::Done(self.call_data(&f, &name, &args, &read)?));
+                    return Ok(Prepared::Done(self.call_data(&f, &name, &this, &args, &read)?));
                 }
                 Func::Eval { f, end, strict_writes, name } => {
                     return Ok(Prepared::Done(self.call_evaluator(&f, &end, &strict_writes, &name, &args)?));
@@ -2265,6 +2272,11 @@ impl Interp {
                 let obj = self.heap.alloc_object(Object::new(Class::Ordinary, Some(proto)));
                 self.stack.truncate(start);
                 self.enter_function(Entry { callee, code, env, this: Value::Object(obj), args }, Some(obj), false)
+            }
+            Some(Func::Data { f: data, name, read: crate::host::ArgRead::Construct }) => {
+                let v = self.construct_host(&f, &data, &name, &args)?;
+                self.stack.truncate(start);
+                self.push(v)
             }
             Some(Func::Native { f: native, constructor: true, .. }) => {
                 let held = self.held_bytes;

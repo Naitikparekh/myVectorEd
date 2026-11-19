@@ -1071,6 +1071,8 @@ fn to_json(d: &Data) -> Value {
         Data::String(s) => Value::String(s.clone()),
         Data::Array(a) => Value::Array(a.iter().map(to_json).collect()),
         Data::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), to_json(v))).collect()),
+        // An object of the document model crosses to a command as the id the host keeps for it.
+        Data::Host(r) => Value::String(r.id.clone()),
     }
 }
 
@@ -1122,6 +1124,7 @@ fn data_size(d: &Data) -> u64 {
         Data::String(s) => s.len() as u64 + 2,
         Data::Array(a) => 8 + a.iter().map(data_size).sum::<u64>(),
         Data::Object(o) => 8 + o.iter().map(|(k, v)| k.len() as u64 + 2 + data_size(v)).sum::<u64>(),
+        Data::Host(r) => 8 + r.class.len() as u64 + r.id.len() as u64 + r.items.as_ref().map_or(0, |a| a.iter().map(data_size).sum::<u64>()),
     }
 }
 
