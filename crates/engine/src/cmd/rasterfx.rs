@@ -21,7 +21,8 @@ use serde_json::{Map, Value, json};
 use vectorcraft_color::{BlendMode, Paint};
 use vectorcraft_doc::rastersettings::MAX_ADD_AROUND;
 use vectorcraft_doc::{
-    Appearance, AppearanceItem, ColorMode, Document, Effect, ImageBlob, ImageObject, Node, NodeId, NodeKind, RasterColorModel, StrokeLayer,
+    Appearance, AppearanceItem, ColorMode, Document, Effect, ImageBlob, ImageObject, Node, NodeId, NodeKind, OpacityMask, RasterColorModel,
+    StrokeLayer,
 };
 use vectorcraft_geom::{Affine, FillRule, PathData, Rect};
 use vectorcraft_render::effects::{self, RasterFx};
@@ -266,6 +267,14 @@ pub(crate) fn effect_image(out: &mut Document, whole: &Node, knockout: Option<&N
     // Document Raster Effects Settings: colour model, background.
     look.finish_pixels(&mut img.pixels);
     // Can't encode: keep the object as it is (vector, effects ignored) rather than fail the export.
+    let mut image = image_node(out, &img, region, scale)?;
+    image.name = Some("Raster effect".into());
+    Some(image)
+}
+
+/// An image object of `img`, rendered over `region` at `scale`, its PNG kept in `out`'s images.
+/// `None` when the PNG can't be encoded.
+fn image_node(out: &mut Document, img: &vectorcraft_render::Rendered, region: Rect, scale: f64) -> Option<Node> {
     let png = img.to_png().ok()?;
     let id = out.alloc_id();
     let mut key = format!("raster-effect-{}", id.0);
@@ -274,7 +283,7 @@ pub(crate) fn effect_image(out: &mut Document, whole: &Node, knockout: Option<&N
     }
     out.images.insert(key.clone(), ImageBlob::new("image/png", png));
     let xf = Affine::translate(region.origin().to_vec2()) * Affine::scale(1.0 / scale);
-    let mut image = Node::new(
+    let image = Node::new(
         id,
         NodeKind::Image(Box::new(ImageObject {
             key,
@@ -286,7 +295,6 @@ pub(crate) fn effect_image(out: &mut Document, whole: &Node, knockout: Option<&N
             pixels: None,
         })),
     );
-    image.name = Some("Raster effect".into());
     Some(image)
 }
 
@@ -491,16 +499,130 @@ pub(crate) fn put_below(d: &mut Document, m: &mut Node, image: Node) {
         NodeKind::Group { children, clip: false } => children.insert(0, Arc::new(image)),
         NodeKind::Layer { children, clip, .. } => children.insert(usize::from(*clip).min(children.len()), Arc::new(image)),
         _ => {
-            let mut inner = m.clone();
-            inner.id = d.alloc_id();
-            (inner.name, inner.opacity, inner.blend, inner.isolate) = (None, 1.0, Default::default(), false);
-            inner.extras_mut().mask = None;
-            // Knockout is between the object's own parts (a blend's steps): it stays with them,
-            // so the image doesn't knock out the art over it.
-            m.knockout = Default::default();
-            inner.knockout_shape = false;
-            m.appearance = Default::default();
+            let inner = wrapped(d, m);
             m.kind = NodeKind::Group { children: vec![Arc::new(image), Arc::new(inner)], clip: false };
+        }
+    }
+}
+
+/// A copy of `m`'s art, with a new id and without its name and transparency, for `m` to hold as a
+/// group with other art ([`put_below`], [`put_above`]); `m` keeps its id, name and transparency and
+/// loses its appearance (its kind is for the caller to set).
+fn wrapped(d: &mut Document, m: &mut Node) -> Node {
+    let mut inner = m.clone();
+    inner.id = d.alloc_id();
+    (inner.name, inner.opacity, inner.blend, inner.isolate) = (None, 1.0, Default::default(), false);
+    inner.extras_mut().mask = None;
+    // Knockout is between the object's own parts (a blend's steps): it stays with them,
+    // so the image doesn't knock out the art over it.
+    m.knockout = Default::default();
+    inner.knockout_shape = false;
+    m.appearance = Default::default();
+    inner
+}
+
+/// Is every raster effect of `n` an Inner Glow of its own (none on its fills or strokes), with at
+/// least one, on art that is not a group, layer, guide or clipping path? Expand Appearance then
+/// keeps its art as vectors and makes each glow an object above it ([`inner_glow_overlays`]).
+pub(crate) fn inner_glows_only(n: &Node) -> bool {
+    if is_container(n) || raster_fx(n).is_empty() {
+        return false;
+    }
+    let own = effects::raster_effects(&n.appearance.effects);
+    own.iter().all(|fx| matches!(fx, RasterFx::InnerGlow { .. }))
+        && n.appearance.items.iter().all(|i| effects::raster_effects(i.effects()).is_empty())
+}
+
+/// The positions in `n`'s own effects of its visible Inner Glows.
+fn inner_glow_slots(n: &Node) -> Vec<usize> {
+    n.appearance.effects.iter().enumerate().filter(|(_, e)| e.visible && e.id == INNER_GLOW).map(|(i, _)| i).collect()
+}
+
+const INNER_GLOW: &str = "stylize.innerGlow";
+
+/// `n` without its transparency and with its raster effects but its Inner Glow at `slot`, that
+/// glow painting at full strength in `color` (white or black) in Normal mode: the difference
+/// between the two colours is the glow's strength.
+fn glow_art(n: &Node, slot: usize, color: &str) -> Node {
+    let mut art = effect_art(n, false, false);
+    let own = std::mem::take(&mut art.appearance.effects);
+    art.appearance.effects = own
+        .into_iter()
+        .enumerate()
+        .filter(|(i, e)| *i == slot || !effects::is_raster(&e.id))
+        .map(|(i, mut e)| {
+            if i == slot
+                && let Some(m) = e.params.as_object_mut()
+            {
+                m.insert("color".into(), json!(color));
+                m.insert("mode".into(), json!("normal"));
+                m.insert("opacity".into(), json!(100.0));
+            }
+            e
+        })
+        .collect();
+    art
+}
+
+/// The pixels the masks of [`inner_glow_overlays`] hold.
+pub(crate) fn inner_glow_pixels(d: &Document, n: &Node) -> u64 {
+    inner_glow_slots(n)
+        .into_iter()
+        .filter_map(|slot| effect_region(d, &glow_art(n, slot, "#ffffff"), effects_scale(d)))
+        .map(|(r, scale)| ((r.width() * scale).round() * (r.height() * scale).round()) as u64)
+        .sum()
+}
+
+/// What Expand Appearance makes of the Inner Glows of `n` ([`inner_glows_only`]), in paint order,
+/// to go above its expanded art: for each glow, a rectangle over the glow's area filled with its
+/// colour, with its blend mode and opacity, whose opacity mask is an image of the glow's strength
+/// (white where it glows fully, black where it doesn't), at the Document Raster Effects
+/// resolution. So "the inner glow reveals itself as an opacity mask"
+/// (<https://helpx.adobe.com/illustrator/desktop/special-effects-styles/apply-filter-effects/create-an-inner-or-outer-glow.html>)
+/// and the object stays vector art, drawn as the canvas draws the glow. `None` when an image
+/// can't be made.
+pub(crate) fn inner_glow_overlays(d: &mut Document, n: &Node) -> Option<Vec<Node>> {
+    let look = d.raster_effects.clone();
+    let anti_alias = if look.anti_alias { AntiAlias::Art } else { AntiAlias::None };
+    let mut out = vec![];
+    for slot in inner_glow_slots(n) {
+        let glow = n.appearance.effects.get(slot)?;
+        let Some(RasterFx::InnerGlow { mode, opacity, color, .. }) = effects::raster_effects(std::slice::from_ref(glow)).into_iter().next() else {
+            continue;
+        };
+        let white = glow_art(n, slot, "#ffffff");
+        let (region, scale) = effect_region(d, &white, effects_scale(d))?;
+        let mut strength = render(d, vec![white], region, scale, anti_alias);
+        let without = render(d, vec![glow_art(n, slot, "#000000")], region, scale, anti_alias);
+        if (strength.width, strength.height) != (without.width, without.height) {
+            return None;
+        }
+        // Premultiplied, the white glow adds its strength (times the art's coverage) to each
+        // channel over the black one.
+        for (p, q) in strength.pixels.as_chunks_mut::<4>().0.iter_mut().zip(without.pixels.as_chunks::<4>().0) {
+            let g = (0..3).map(|c| p[c].saturating_sub(q[c])).max().unwrap_or(0);
+            *p = [g, g, g, 255];
+        }
+        let mut mask = image_node(d, &strength, region, scale)?;
+        mask.name = Some("Inner Glow mask".into());
+        let mut over = super::pathops::shape_node(d, vectorcraft_geom::shapes::rectangle(region), None);
+        over.appearance = Appearance::basic(Paint::solid(color), Paint::None, 0.0).into();
+        (over.opacity, over.blend) = (opacity, mode);
+        over.name = Some("Inner Glow".into());
+        over.extras_mut().mask = Some(Box::new(OpacityMask::new(mask, true)));
+        out.push(over);
+    }
+    Some(out)
+}
+
+/// `m` with `above` painted over its art: added last to a group, anything else is grouped with
+/// them under its id, name and transparency (as [`put_below`] does).
+pub(crate) fn put_above(d: &mut Document, m: &mut Node, above: Vec<Node>) {
+    match &mut m.kind {
+        NodeKind::Group { children, clip: false } => children.extend(above.into_iter().map(Arc::new)),
+        _ => {
+            let inner = wrapped(d, m);
+            m.kind = NodeKind::Group { children: std::iter::once(inner).chain(above).map(Arc::new).collect(), clip: false };
         }
     }
 }

@@ -1189,3 +1189,50 @@ fn copies_the_raster_budget_leaves_keep_their_random_moves() {
         assert_eq!((budget.images, budget.pixels), (images, u64::MAX), "{images}: the budget gets back what the copies took");
     }
 }
+
+/// Expand Appearance of an object whose only raster effect is an Inner Glow keeps its art as
+/// vectors and makes the glow an object above it, "the inner glow reveals itself as an opacity
+/// mask" (<https://helpx.adobe.com/illustrator/desktop/special-effects-styles/apply-filter-effects/create-an-inner-or-outer-glow.html>):
+/// a shape in the glow's colour, mode and opacity whose opacity mask is the glow's strength. The
+/// result draws as the live glow did. An object with another raster effect still becomes an image.
+#[test]
+fn expanding_an_inner_glow_keeps_the_art_and_makes_the_glow_an_opacity_mask() {
+    let render = |s: &Session| {
+        let opts = vectorcraft_render::RenderOptions { background: Some([255, 255, 255, 255]), ..Default::default() };
+        vectorcraft_render::Renderer::new().render(&s.doc().unwrap().doc, 400, 400, vectorcraft_geom::Affine::IDENTITY, &opts)
+    };
+    let (mut s, id) = session_with_rect();
+    s.execute("paint.setFill", &json!({"color": "#203080"})).unwrap();
+    s.execute("paint.setStroke", &json!({"color": "none"})).ok();
+    s.execute(
+        "effect.apply",
+        &json!({"effect": "stylize.innerGlow", "params": {"color": "#ffcc00", "mode": "screen", "opacity": 80, "blur": 12}, "ids": [id.0]}),
+    )
+    .unwrap();
+    let before = render(&s);
+    s.execute("effect.expandAppearance", &json!({"ids": [id.0]})).unwrap();
+    let n = node(&s, id);
+    let NodeKind::Group { children, .. } = &n.kind else { panic!("a group: {:?}", n.kind_label()) };
+    // The art stays vector art: no image among the members.
+    assert!(children.iter().all(|c| !matches!(c.kind, NodeKind::Image(_))), "{:?}", children.iter().map(|c| c.kind_label()).collect::<Vec<_>>());
+    let glow = children.last().unwrap();
+    assert_eq!(glow.blend, vectorcraft_color::BlendMode::Screen);
+    assert!((glow.opacity - 0.8).abs() < 1e-6);
+    let mask = glow.extras().mask.clone().expect("the glow's strength is an opacity mask");
+    assert!(mask.clip && matches!(mask.art.kind, NodeKind::Image(_)));
+    assert!(n.appearance.effects.is_empty());
+    // It draws as the live glow did.
+    let after = render(&s);
+    let worst = before.pixels.iter().zip(&after.pixels).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(worst <= 6, "largest channel difference {worst}");
+    // The glow shows: brighter at the edge than in the middle.
+    let px = |r: &vectorcraft_render::Rendered, x: usize, y: usize| r.pixels[(y * r.width as usize + x) * 4] as i32;
+    assert!(px(&after, 102, 150) > px(&after, 150, 150) + 40, "edge {} centre {}", px(&after, 102, 150), px(&after, 150, 150));
+
+    // With a Gaussian Blur as well, the object becomes an image as before.
+    let (mut s, id) = session_with_rect();
+    s.execute("effect.apply", &json!({"effect": "stylize.innerGlow", "ids": [id.0]})).unwrap();
+    s.execute("effect.apply", &json!({"effect": "blur.gaussian", "params": {"radius": 2}, "ids": [id.0]})).unwrap();
+    s.execute("effect.expandAppearance", &json!({"ids": [id.0]})).unwrap();
+    assert!(matches!(node(&s, id).kind, NodeKind::Image(_)));
+}

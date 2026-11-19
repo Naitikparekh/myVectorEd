@@ -97,7 +97,7 @@ fn effect_specs() -> Vec<CommandSpec> {
             "Expand Appearance",
             ["Object"],
             None,
-            "{ids?|id?: [..], target?} turn each object's appearance into objects: every fill and stroke becomes an object of its own (a stroke stays a stroke, with its weight, dashes, arrowheads and width profile, on its own copy of the path, which object.expand or object.path.outlineStroke outline; brushed strokes become their brush art) grouped in paint order under the object's id and transparency, geometry effects are baked, raster effects become an embedded image (shadows and outer glows below the art; blur, feather and inner glow replace it; an object whose only raster effect is its own Rasterize becomes the image object.rasterize makes with the effect's options), type with effects or fills of its own is outlined; Crop Marks become a group of the object and its marks; Vector Halftone (addon.color.halftone) becomes a group of its dot paths, one per ink; a group's or layer's own fills and strokes become objects among its members, which are expanded too; a symbol instance whose topmost fill or stroke is visible, has an opacity above 0 and has a geometry or raster effect becomes a group of its art, that fill's effects reshaping the art's filled shapes and that stroke's effects reshaping its stroked shapes, as the canvas draws them, its raster effects an image as for other objects; a symbol instance in that art whose topmost fill or stroke has such an effect (its own or one the outer instance passes on) becomes its art and image in turn. An outlined frame of threaded text leaves its thread with the text it shows, and a frame kept as type in a group stays in its thread. A dimension whose art it changes becomes a plain group of its art, except one selected with art it measures, directly or in groups without fills, strokes or effects of their own: its lines and label stay as they are, and if the new art no longer fits its link it stays where it was, no longer linked. Hidden fills, strokes and effects are dropped. One expansion makes at most 1,024 images of raster effects, 256 megapixels in all (VectorCraft's own limits): an object or symbol instance whose image would go past them stays as it is, with its effects, and when nothing else expands that is an error. In Safe Mode, an object with a visible plug-in effect (in it, or in a symbol it places) is an error and nothing changes. Enabled when a selected or targeted object's appearance isn't basic (`ids` then pick which objects) → {ids, warning? (an image in the art couldn't be decoded, as object.rasterize says; or raster effects were left past the limits), rasterLeft? (how many objects were left so)}",
+            "{ids?|id?: [..], target?} turn each object's appearance into objects: every fill and stroke becomes an object of its own (a stroke stays a stroke, with its weight, dashes, arrowheads and width profile, on its own copy of the path, which object.expand or object.path.outlineStroke outline; brushed strokes become their brush art) grouped in paint order under the object's id and transparency, geometry effects are baked, raster effects become an embedded image (shadows and outer glows below the art; blur, feather and inner glow replace it, except that an object other than a group or layer whose only raster effects are Inner Glows of its own keeps its art expanded as vectors, each glow above it as a rectangle in the glow's colour, mode and opacity whose opacity mask is an image of the glow's strength; an object whose only raster effect is its own Rasterize becomes the image object.rasterize makes with the effect's options), type with effects or fills of its own is outlined; Crop Marks become a group of the object and its marks; Vector Halftone (addon.color.halftone) becomes a group of its dot paths, one per ink; a group's or layer's own fills and strokes become objects among its members, which are expanded too; a symbol instance whose topmost fill or stroke is visible, has an opacity above 0 and has a geometry or raster effect becomes a group of its art, that fill's effects reshaping the art's filled shapes and that stroke's effects reshaping its stroked shapes, as the canvas draws them, its raster effects an image as for other objects; a symbol instance in that art whose topmost fill or stroke has such an effect (its own or one the outer instance passes on) becomes its art and image in turn. An outlined frame of threaded text leaves its thread with the text it shows, and a frame kept as type in a group stays in its thread. A dimension whose art it changes becomes a plain group of its art, except one selected with art it measures, directly or in groups without fills, strokes or effects of their own: its lines and label stay as they are, and if the new art no longer fits its link it stays where it was, no longer linked. Hidden fills, strokes and effects are dropped. One expansion makes at most 1,024 images of raster effects, 256 megapixels in all (VectorCraft's own limits): an object or symbol instance whose image would go past them stays as it is, with its effects, and when nothing else expands that is an error. In Safe Mode, an object with a visible plug-in effect (in it, or in a symbol it places) is an error and nothing changes. Enabled when a selected or targeted object's appearance isn't basic (`ids` then pick which objects) → {ids, warning? (an image in the art couldn't be decoded, as object.rasterize says; or raster effects were left past the limits), rasterLeft? (how many objects were left so)}",
             can_expand,
             expand_appearance
         ),
@@ -992,6 +992,37 @@ fn raster_image(d: &mut Document, n: &Node, budget: &mut RasterBudget) -> std::r
     Ok(image.map(|image| (image, below)))
 }
 
+/// [`raster_image`] of `n`, except when its only raster effects are Inner Glows of its own: then
+/// `glows` takes the objects they become ([`rasterfx::inner_glow_overlays`]) and there is no image.
+fn glows_or_raster_image(
+    d: &mut Document,
+    n: &Node,
+    raster: &mut RasterBudget,
+    glows: &mut Option<Vec<Node>>,
+) -> std::result::Result<Option<(Node, bool)>, OverBudget> {
+    if rasterfx::inner_glows_only(n) {
+        raster.take(rasterfx::inner_glow_pixels(d, n))?;
+        *glows = rasterfx::inner_glow_overlays(d, n);
+        if glows.is_some() {
+            return Ok(None);
+        }
+    }
+    raster_image(d, n, raster)
+}
+
+/// `expanded` (or `base`, the object without its raster effects, when it expands to nothing) with
+/// the objects its Inner Glows became painted above it.
+fn with_glows(d: &mut Document, expanded: Option<Node>, glows: Option<Vec<Node>>, base: Option<Node>) -> Option<Node> {
+    match (glows, base) {
+        (Some(glows), Some(base)) if !glows.is_empty() => {
+            let mut m = expanded.unwrap_or(base);
+            rasterfx::put_above(d, &mut m, glows);
+            Some(m)
+        }
+        _ => expanded,
+    }
+}
+
 /// The most images of raster effects one Expand Appearance makes.
 const MAX_RASTER_IMAGES: u32 = 1_024;
 
@@ -1391,9 +1422,12 @@ fn expanded_node(
     // Raster effects whose image would go past the budget stay: so does the object, with what is
     // inside it and its color adjustments (a symbol instance stays an instance of its symbol), and
     // so does a group or layer whose copies keep a random Transform effect the budget left.
+    // Inner glows alone: the art stays vector art and each glow becomes an object above it, its
+    // strength an opacity mask ([`rasterfx::inner_glow_overlays`]).
+    let mut glows = None;
     let Ok(image) = copies.and_then(|copied| {
         changed |= copied;
-        raster_image(d, &n, raster)
+        glows_or_raster_image(d, &n, raster, &mut glows)
     }) else {
         out.truncate(listed_before);
         if let Some(keys) = images_before {
@@ -1404,6 +1438,7 @@ fn expanded_node(
     };
     let mut v = n.clone();
     rasterfx::strip_raster(&mut v, false);
+    let glow_base = glows.as_ref().map(|_| v.clone());
     let mut stroke_art =
         |d: &mut Document, path: &PathData, rule: FillRule, st: &StrokeLayer| super::pathops::outlined_stroke(d, brushes, path, rule, st);
     let expanded = match image {
@@ -1460,6 +1495,7 @@ fn expanded_node(
             }
         }
     };
+    let expanded = with_glows(d, expanded, glows, glow_base);
     if let Some(m) = expanded {
         n = m;
         changed = true;
