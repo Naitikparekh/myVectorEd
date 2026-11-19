@@ -418,8 +418,8 @@ fn expanding_a_revolve_in_wireframe_mode_gives_the_edges() {
     assert!(art.iter().all(|(_, filled, stroke)| !filled && stroke.as_ref().is_some_and(|s| s.width == WIRE_WEIGHT)));
 }
 
-/// `render` is checked before an edit: an object holding only `mode`, `shaded` or `wireframe`, and
-/// only on the panel's four effects.
+/// `render` is checked before an edit: an object holding `mode` (`shaded` or `wireframe`),
+/// `rayTracing` and `quality`, and only on the panel's four effects.
 #[test]
 fn render_settings_are_validated() {
     for id in WIRE {
@@ -431,10 +431,15 @@ fn render_settings_are_validated() {
             json!({"render": null}),
             json!({"render": {"mode": "raytrace"}}),
             json!({"render": {"mode": true}}),
-            json!({"render": {"mode": "wireframe", "quality": "high"}}),
+            json!({"render": {"mode": "wireframe", "quality": "ultra"}}),
+            json!({"render": {"mode": "wireframe", "noise": 1}}),
         ] {
             let e = crate::validate_three_d_params(id, &bad).unwrap_err();
-            assert_eq!(e, "`render` must be an object holding only `mode`, set to shaded or wireframe", "{id} {bad}");
+            assert_eq!(
+                e,
+                "`render` must be an object holding `mode` (shaded or wireframe), `rayTracing` (true or false) and `quality` (low, medium or high)",
+                "{id} {bad}"
+            );
         }
         // The command check on the object refuses it too.
         let n = solid_square(id, json!({}));
