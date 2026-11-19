@@ -94,6 +94,12 @@ pub fn three_d_params_as(from: &str, params: &Value, to: &str) -> Value {
     {
         list.retain(|g| g.get("face").and_then(Value::as_str) != Some(PlanarFace::Back.id()));
     }
+    // Only Extrude & Bevel has sides that take graphics.
+    if to != EXTRUDE
+        && let Some(Value::Array(list)) = out.get_mut(GRAPHICS)
+    {
+        list.retain(|g| g.get("face").and_then(Value::as_str) != Some(graphics::SIDE));
+    }
     Value::Object(out)
 }
 
@@ -330,6 +336,9 @@ fn validate_solid_for(doc: Option<&Document>, n: &Node, id: &str, p: &Value, at:
     validate_solid_params(id, p)?;
     if let Some(doc) = doc {
         graphics::validate_symbols(doc, p)?;
+        if id == EXTRUDE {
+            graphics::validate_surface_symbols(doc, p, true)?;
+        }
     }
     let label = label_of(id);
     let n = &*source::resolve_for(doc, n, label, is_plane(id))?;
@@ -716,6 +725,25 @@ fn surface(
         group.extras_mut().mask = Some(Box::new(vectorcraft_doc::OpacityMask::new(coverage, true)));
     }
     group
+}
+
+/// `surface` with each of its faces followed by the parts of the side graphics drawn on it
+/// (`parts`, one list per facet): each face and its parts become a group, so the surface keeps one
+/// child for each facet and its faces can still go in one order with other solids'. A surface drawn
+/// as one composite, with no face for each facet, is left as it is.
+fn with_side_parts(id: NodeId, mut surface: Node, parts: &[Vec<Arc<Node>>]) -> Node {
+    if let NodeKind::Group { children, clip: false } = &mut surface.kind
+        && children.len() == parts.len()
+    {
+        for (child, parts) in children.iter_mut().zip(parts) {
+            if !parts.is_empty() {
+                let mut group = vec![child.clone()];
+                group.extend(parts.iter().cloned());
+                *child = Arc::new(Node::group(id, group));
+            }
+        }
+    }
+    surface
 }
 
 /// The bounds of every facet of `facets` together (`Rect::ZERO` when none has any).
@@ -1960,9 +1988,23 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
     // ([`in_one_order`], [`underlaid_surface`]).
     let seals: Vec<bool> = solids.iter().map(|(.., f, _)| underlaid(f, colored)).collect();
     let seal = |range: std::ops::Range<usize>| seals.get(range).is_some_and(|s| s.iter().any(|s| *s));
+    // The graphics on Extrude & Bevel's sides go on the first fill's solid whose walls are unrolled
+    // ([`graphics::side_parts`]): each part right after the wall it is drawn on.
+    let side = if fx.id == EXTRUDE && graphics_on {
+        let list = mapped_graphics(&p);
+        solids.iter().enumerate().find_map(|(k, (item, .., f, _))| {
+            if !matches!(item, AppearanceItem::Fill(_)) || !f.iter().any(|f| f.surface.is_some()) {
+                return None;
+            }
+            Some((k, graphics::side_parts(doc, n.id, &list, f)?))
+        })
+    } else {
+        None
+    };
     let surfaces: Vec<BuiltSurface> = solids
         .into_iter()
-        .map(|(item, member, scopes, f, shape)| {
+        .enumerate()
+        .map(|(k, (item, member, scopes, f, shape))| {
             let paints = Paints::of(item, closed(shape));
             let depths: Vec<Placed> = f.iter().map(|f| Placed::of(f, shape, paints)).collect();
             let ends = f.iter().map(|f| f.end.filter(|_| !f.away)).collect();
@@ -1971,6 +2013,10 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
                 classic::surface(n, f, &paint, opacity, blend, &p)
             } else {
                 surface(n, f, &paint, opacity, blend, colored, split && shared.get(shape).copied().unwrap_or(false), mats.as_ref())
+            };
+            let art = match &side {
+                Some((at, parts)) if *at == k => with_side_parts(n.id, art, parts),
+                _ => art,
             };
             (depths, art, scopes, ends)
         })

@@ -296,6 +296,12 @@ pub struct Facet {
     /// The planar end of the solid the facet is: Extrude & Bevel's front or back cap, or a plane
     /// (its front). `None` for every other facet.
     pub end: Option<PlanarFace>,
+    /// For a wall or bevel facet of Extrude & Bevel's longest outline: where its corners lie on the
+    /// sides unrolled flat, for a graphic mapped onto the sides. x is the length along the outline
+    /// (before any inset of a bevel) from its first point, clockwise as the front is seen, and y
+    /// the depth from the middle of the extrusion toward the front, in points: a graphic on a wall
+    /// seen from outside reads the right way round, its top toward the back.
+    pub surface: Option<crate::SurfaceCell>,
     /// The face's plane in view space and the projection it was drawn with, for its depth at a
     /// point of the drawing ([`Facet::depth_at`]). `None` for a face whose corners lie more than
     /// 0.001 pt off one plane (a piece of a twisted wall) or reach the eye.
@@ -383,6 +389,7 @@ impl Facet {
             side: !face.cap,
             // A revolved cap is not one of the planar faces graphics map onto.
             end: None,
+            surface: None,
             away: false,
             plane: face.plane,
             #[cfg(test)]

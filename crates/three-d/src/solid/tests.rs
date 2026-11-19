@@ -1666,3 +1666,43 @@ fn a_one_anchor_subpath_builds_nothing() {
     let b = Rect::new(-20.0, 0.0, 20.0, 30.0);
     assert_eq!(area(&plane(&p, FillRule::NonZero, b, front()).unwrap()), 0.0);
 }
+
+/// The sides of Extrude & Bevel unrolled: each wall of the longest outline knows where its corners
+/// lie, x along the outline clockwise and y toward the front, so a graphic seen on a wall from
+/// outside reads the right way round whichever way the outline was drawn.
+#[test]
+fn walls_carry_where_they_lie_on_the_unrolled_sides() {
+    let view = View { rotation_x: -25.0, rotation_y: 30.0, rotation_z: 0.0, ..View::default() };
+    let b = Rect::new(100.0, 100.0, 200.0, 200.0);
+    let clockwise = PathData::from_bezpath(&square(100.0, 100.0, 100.0));
+    let counter = PathData::from_bezpath(&square(100.0, 100.0, 100.0).reverse_subpaths());
+    for path in [clockwise, counter] {
+        let facets = extrude(&path, FillRule::NonZero, b, Extrude::default(), view).unwrap();
+        let walls: Vec<&Facet> = facets.iter().filter(|f| f.side).collect();
+        assert!(!walls.is_empty());
+        for f in &walls {
+            let cell = f.surface.as_ref().expect("every wall of the only outline is unrolled");
+            assert_eq!(cell.page, f.contours[0]);
+            assert_eq!(cell.outward, !f.away);
+            // x within the outline's length, y within half the depth either side of the middle.
+            assert!(cell.uv.iter().all(|p| (-1e-9..=400.0 + 1e-9).contains(&p.x) && p.y.abs() <= 25.0 + 1e-9), "{:?}", cell.uv);
+            // Seen from outside, the map from the unrolled sides onto the page keeps their handedness.
+            if !f.away {
+                let (u, p) = (&cell.uv, &cell.page);
+                let du = (u[1] - u[0], u[3] - u[0]);
+                let dp = (p[1] - p[0], p[3] - p[0]);
+                let turn_uv = du.0.cross(du.1);
+                let turn_page = dp.0.cross(dp.1);
+                assert!(turn_uv * turn_page > 0.0, "a wall seen from outside reads the right way round");
+            }
+        }
+        // The caps carry no cell.
+        assert!(facets.iter().filter(|f| f.end.is_some()).all(|f| f.surface.is_none()));
+    }
+    // Only the longest outline is unrolled: a hole's walls carry none.
+    let mut both = square(0.0, 0.0, 100.0);
+    both.extend(square(25.0, 25.0, 50.0).reverse_subpaths().iter());
+    let facets = extrude(&PathData::from_bezpath(&both), FillRule::NonZero, Rect::new(0.0, 0.0, 100.0, 100.0), Extrude::default(), view).unwrap();
+    let (cells, walls) = facets.iter().filter(|f| f.side).fold((0, 0), |(c, w), f| (c + usize::from(f.surface.is_some()), w + 1));
+    assert!(cells > 0 && cells < walls, "{cells} of {walls}");
+}
