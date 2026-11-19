@@ -13087,3 +13087,37 @@ fn a_stack_with_a_gradient_fill_is_written_live() {
         &Appearance { items: stack().items[1..].to_vec(), ..Appearance::default() }
     ));
 }
+
+/// A path with two different gradient fills and a stroke is written with an art style of its stack
+/// and reads back as one path with both gradients live, in order; one whose two gradient fills are
+/// the same gradient, which the reader would take as one, is written as its drawn look.
+#[test]
+fn a_stack_of_two_gradient_fills_is_written_live() {
+    let glow = ramp(GradientKind::Radial, &[(0.0, Color::WHITE, 1.0, 0.5), (1.0, Color::rgb(0.9, 0.6, 0.1), 0.6, 0.5)]);
+    let stack = |top: Gradient| Appearance {
+        items: vec![
+            AppearanceItem::Fill(FillLayer::new(gradient_paint(sunset(), None, None))),
+            AppearanceItem::Fill(FillLayer::new(gradient_paint(top, None, None))),
+            AppearanceItem::Stroke(StrokeLayer::new(black_fill(), 2.0)),
+        ],
+        ..Appearance::default()
+    };
+    let rect = Rect::new(10.0, 10.0, 90.0, 60.0);
+    let (n, warnings, p) = read_one(|doc| named(Node::path(doc.alloc_id(), shapes::rectangle(rect), stack(glow.clone())), "Graded"));
+    assert!(p.contains("(Anon 1) XW"), "{warnings:?}");
+    assert!(matches!(n.kind, NodeKind::Path { .. }), "{n:?}");
+    let kinds: Vec<Option<GradientKind>> = n
+        .appearance
+        .items
+        .iter()
+        .map(|i| match i.paint() {
+            Paint::Gradient(g) => Some(g.gradient.kind),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(kinds, [Some(GradientKind::Linear), Some(GradientKind::Radial), None], "{:?}", n.appearance);
+
+    let (n, _, p) = read_one(|doc| named(Node::path(doc.alloc_id(), shapes::rectangle(rect), stack(sunset())), "Twice"));
+    assert!(!p.contains("(Anon 1) XW"), "{p}");
+    assert!(!matches!(n.kind, NodeKind::Path { .. }), "{n:?}");
+}

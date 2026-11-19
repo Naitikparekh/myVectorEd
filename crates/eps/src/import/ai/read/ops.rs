@@ -1427,13 +1427,25 @@ pub(crate) fn read_style_list(section: &[u8]) -> Vec<String> {
 /// doesn't define it, the reader doesn't read it, or it paints with a pattern or a gradient that
 /// isn't the object's own.
 pub(crate) fn read_art_style(section: &[u8], name: &str, own_gradient: Option<&Paint>) -> Option<StyleRead> {
+    read_stacked_art_style(section, name, own_gradient.as_slice())
+}
+
+/// [`read_art_style`] for a style whose gradient fills are, bottom first, `own_gradients`: each the
+/// gradient the object's drawn look places where the style's is, as [`styled`] reads a stack's
+/// gradients. `None` as well when the style has gradients and their number isn't that of
+/// `own_gradients`.
+pub(crate) fn read_stacked_art_style(section: &[u8], name: &str, own_gradients: &[&Paint]) -> Option<StyleRead> {
     use crate::import::ai::style::StyleItem;
     let mut st = crate::import::ai::style::art_styles(section).remove(name)?;
-    if st.items.iter().filter(|i| matches!(i, StyleItem::Gradient { .. })).count() == 1 {
-        let own = own_gradient?;
+    let gradients = st.items.iter().filter(|i| matches!(i, StyleItem::Gradient { .. })).count();
+    if gradients > 0 {
+        if gradients != own_gradients.len() {
+            return None;
+        }
+        let mut owns = own_gradients.iter();
         for item in &mut st.items {
             if matches!(item, StyleItem::Gradient { .. }) {
-                *item = StyleItem::Fill(own.clone());
+                *item = StyleItem::Fill((*owns.next()?).clone());
             }
         }
     }

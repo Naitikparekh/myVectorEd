@@ -11,7 +11,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use serde_json::Value;
-use vectorcraft_color::{BlendMode, Paint};
+use vectorcraft_color::{BlendMode, GradientPaint, Paint};
 use vectorcraft_doc::{Appearance, AppearanceItem, Document, Effect, FillLayer, GraphicStyle, Knockout, Node, NodeId, NodeKind, StrokeLayer};
 use vectorcraft_geom::{BezPath, FillRule, Rect, Shape};
 
@@ -152,7 +152,16 @@ fn stacked(n: &Node) -> bool {
         AppearanceItem::Stroke(s) => matches!(s.paint, Paint::Solid { .. }) && s.brush.is_none(),
     };
     let plain = painting().all(|i| held(i) && i.effects().is_empty());
-    (fills > 1 || strokes > 1) && plain
+    // The reader takes a stack's gradients by name, each once: gradient fills alike are written as
+    // one gradient of one name.
+    let gradients: Vec<&GradientPaint> = painting()
+        .filter_map(|i| match i.paint() {
+            Paint::Gradient(g) => Some(g.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let apart = gradients.iter().enumerate().all(|(at, g)| gradients.iter().take(at).all(|o| o.gradient != g.gradient || o.swatch != g.swatch));
+    (fills > 1 || strokes > 1) && plain && apart
 }
 
 /// Does `n` have a stroke with a brush that paints, one that its art style holds ([`Writer::style_text`]
@@ -984,12 +993,18 @@ fn panel_reads(g: &GraphicStyle, text: &str) -> bool {
 /// style of one Warp? The reader takes such an image's Warp where it draws as its drawn look.
 fn object_reads(n: &Node, text: &str) -> bool {
     let section = known_style("x", text);
-    // The object's gradient fill, below other fills in a stack too.
-    let own = n.appearance.items.iter().find_map(|i| match i {
-        AppearanceItem::Fill(f) if matches!(f.paint, Paint::Gradient(_)) => Some(&f.paint),
-        _ => None,
-    });
-    let Some(mut read) = crate::import::read_art_style(section.as_bytes(), "x", own) else { return false };
+    // The object's gradient fills that paint, bottom first, below other fills in a stack too: the
+    // reader places each where the drawn look has it.
+    let own: Vec<&Paint> = n
+        .appearance
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            AppearanceItem::Fill(f) if matches!(f.paint, Paint::Gradient(_)) => Some(&f.paint),
+            _ => None,
+        })
+        .collect();
+    let Some(mut read) = crate::import::read_stacked_art_style(section.as_bytes(), "x", &own) else { return false };
     let group = matches!(n.kind, NodeKind::Group { .. });
     let image = matches!(n.kind, NodeKind::Image(_));
     if (image && !(read.image_warp && warped_image(n)))
