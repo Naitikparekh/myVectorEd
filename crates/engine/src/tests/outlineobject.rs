@@ -92,3 +92,32 @@ fn type_with_outline_object_exports_and_expands_as_paths() {
     layer.walk(&mut |m| paths += usize::from(matches!(m.kind, NodeKind::Path { .. } | NodeKind::Compound { .. })));
     assert!(paths > 0);
 }
+
+/// With Use Preview Bounds on, Align and Distribute measure type that carries Outline Object by its
+/// glyph outlines, as the Transform panel does: aligned left to the artboard, the outlines' left
+/// edge lands on it rather than the type's layout box; distributed, the outlines' left edges are
+/// spaced evenly.
+#[test]
+fn align_and_distribute_measure_outline_object_type_by_its_glyph_outlines_with_preview_bounds() {
+    let mut s = session();
+    let id = text(&mut s);
+    apply(&mut s, id);
+    let outlines = |s: &Session, id: NodeId| vectorcraft_render::effects::reshape(None, &node(s, id), None).unwrap().geometric_bounds().unwrap();
+    let layout = node(&s, id).geometric_bounds().unwrap();
+    // The outlines sit inside the layout box, away from its left edge (the "O"'s side bearing).
+    assert!(outlines(&s, id).x0 > layout.x0 + 0.5, "outlines {:?} layout {layout:?}", outlines(&s, id));
+    s.execute("prefs.set", &json!({"key": "usePreviewBounds", "value": true})).unwrap();
+    s.execute("select.set", &json!({"ids": [id.0]})).unwrap();
+    s.execute("object.align", &json!({"horizontal": "left", "to": "artboard"})).unwrap();
+    assert!(outlines(&s, id).x0.abs() < 1e-6, "outlines start at the artboard's edge: {:?}", outlines(&s, id));
+
+    // Distribute left edges of three: the outlines' left edges are evenly spaced.
+    let b = NodeId(s.execute("text.create", &json!({"x": 150, "y": 200, "text": "OUTLINE", "size": 48})).unwrap()["id"].as_u64().unwrap());
+    let c = NodeId(s.execute("text.create", &json!({"x": 300, "y": 250, "text": "OUTLINE", "size": 48})).unwrap()["id"].as_u64().unwrap());
+    apply(&mut s, b);
+    s.execute("select.set", &json!({"ids": [id.0, b.0, c.0]})).unwrap();
+    s.execute("object.distribute", &json!({"horizontal": "left"})).unwrap();
+    let c_left = vectorcraft_render::effects::preview::bounds_of(&s.doc().unwrap().doc, &[c], true).unwrap().x0;
+    let lefts = [outlines(&s, id).x0, outlines(&s, b).x0, c_left];
+    assert!(((lefts[1] - lefts[0]) - (lefts[2] - lefts[1])).abs() < 0.5, "{lefts:?}");
+}
