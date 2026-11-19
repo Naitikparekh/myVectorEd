@@ -2027,6 +2027,10 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
                 Some((at, parts)) if *at == k => with_side_parts(n.id, art, parts),
                 _ => art,
             };
+            let art = match &side {
+                Some((at, parts)) if *at == k => with_side_parts(n.id, art, parts),
+                _ => art,
+            };
             (depths, art, scopes, ends)
         })
         .collect();
