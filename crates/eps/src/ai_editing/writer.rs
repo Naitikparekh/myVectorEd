@@ -50,7 +50,7 @@ pub(super) use variables::{ACTIVE, BINDINGS, LIMITS, VALUES};
 /// [`vectorcraft_doc::MAX_DEPTH`].
 pub(super) const MAX_NEST: u32 = 8;
 
-pub(super) const TYPE: &str = "type in opacity masks, pattern tiles, symbols and art cut to a clipping object, mirrored type, area type and type on a path that is turned or unevenly scaled or whose frame or path has several parts, area type in an open frame, type on an open path whose ends meet, area type whose text wrap cannot be preserved from the saved objects, type of only white space, threads of type on a path, threads whose frames differ in orientation or hold a frame written as outlines, type of sizes past what the reader reads, stories past what the reader reads (1,048,576 bytes a story, 16,777,216 bytes in all, and the size of text document it reads), and type with inline graphics, ruby, gradient or pattern paint, or fills, strokes, effects or an opacity mask of the object's own, is written as its outlines in the editing data for other apps";
+pub(super) const TYPE: &str = "type in opacity masks, pattern tiles, symbols and art cut to a clipping object, mirrored type, area type and type on a path that is turned or unevenly scaled or whose frame or path has several parts, area type in an open frame, type on an open path whose ends meet, area type whose text wrap cannot be preserved from the saved objects, type of only white space, threads of type on a path, threads whose frames differ in orientation or hold a frame written as outlines, type of sizes past what the reader reads, stories past what the reader reads (1,048,576 bytes a story, 16,777,216 bytes in all, and the size of text document it reads), and type with inline graphics, ruby, gradient or pattern paint, an opacity mask of the object's own, or fills, strokes or effects of its own that its art style can't hold, is written as its outlines in the editing data for other apps";
 pub(super) const PATTERNS: &str = "pattern fills whose tiles aren't a grid or whose art reaches past the tile, pattern fills in another pattern's tile or in a symbol, and pattern fills nested more than 8 deep are written as their tiles cut to the shape in the editing data for other apps";
 pub(super) const PATTERN_TILES: &str = "pattern fills with more tiles than a fill places are written filled gray in the editing data for other apps";
 pub(super) const CLIPPING: &str = "clipping groups and clipping layers whose clipping object isn't a path, and the clipping groups inside them, are written as their art cut to that object in the editing data for other apps";
@@ -224,6 +224,9 @@ pub(super) struct Writer<'a> {
     styled_copy: bool,
     /// The type just written was written as type, not as its outlines.
     typed: bool,
+    /// The type being written is the copy of a styled text object on the layers, on `%_` lines: it
+    /// is written as type there ([`Self::styled_object`]).
+    pub(super) styled_type: bool,
     /// The objects bound to variables so far, in the order they are written: each one's id, its XML
     /// id and the variables it is bound to ([`Self::bound_variables`]).
     bound: Vec<(vectorcraft_doc::NodeId, String, Vec<String>)>,
@@ -350,6 +353,7 @@ impl<'a> Writer<'a> {
             outlined: 0,
             placed: false,
             styled_copy: false,
+            styled_type: false,
             typed: false,
             bound: vec![],
             texts: texts::TextDoc::default(),
@@ -1537,7 +1541,7 @@ impl<'a> Writer<'a> {
         let thread = doc.text_threads.iter().find(|th| th.contains(&n.id));
         let contents = self.contents_level.filter(|(hidden, nest, _)| (*hidden, *nest) == (self.hidden, self.nest));
         // Type that can't be a stub is written as its outlines, which count their own objects.
-        if (self.hidden > 0 && contents.is_none())
+        if (self.hidden > 0 && contents.is_none() && !self.styled_type)
             || self.clip.is_some()
             || self.in_symbol
             || (thread.is_none() && !texts::holds(n, t, self.wraps_held.contains(&n.id)))
@@ -1592,7 +1596,10 @@ impl<'a> Writer<'a> {
         if !self.open_group("u") {
             return;
         }
-        self.warn(TYPE);
+        // A styled text object's drawn look loses nothing: the object itself is written as type.
+        if !self.in_look {
+            self.warn(TYPE);
+        }
         // The outlines keep the sizes Dynamic Text draws the type at, but not the setting.
         if matches!(&n.kind, NodeKind::Text(t) if t.dynamic_text) {
             self.warn(DYNAMIC_TEXT);
