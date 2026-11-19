@@ -494,7 +494,7 @@ fn graphics_are_checked() {
         json!("Mark"),
         json!([{"face": "front"}]),
         json!([{"symbol": ""}]),
-        json!([{"symbol": "Mark", "face": "side"}]),
+        json!([{"symbol": "Mark", "face": "top"}]),
         json!([{"symbol": "Mark", "scale": 0.0}]),
         json!([{"symbol": "Mark", "rotation": 400.0}]),
         json!([{"symbol": "Mark", "x": "1"}]),
@@ -923,4 +923,73 @@ fn only_an_opaque_part_on_revolve_takes_a_seam_stroke() {
     assert!(!takes_seam(&piece(Paint::solid(red()), 1.0, BlendMode::Multiply)));
     // A pattern's tile may hold transparent art, which the overlap would show.
     assert!(!takes_seam(&piece(Paint::Pattern { pattern: "Dots".into(), xf: Affine::IDENTITY }, 1.0, BlendMode::Normal)));
+}
+
+/// The red parts of graphics in `art` (shading off, so the symbol's red is drawn as it is): their
+/// paths.
+fn red_parts(art: &Node) -> Vec<PathData> {
+    let mut out = vec![];
+    art.walk(&mut |n| {
+        if let (Some(path), Some(AppearanceItem::Fill(f))) = (n.path_data(), n.appearance.items.first())
+            && f.paint.color().is_some_and(|c| c.to_rgb() == [1.0, 0.0, 0.0])
+        {
+            out.push(path.clone());
+        }
+    });
+    out
+}
+
+/// A graphic with face `side` goes on Extrude & Bevel's walls, unrolled flat: x along the outline
+/// clockwise from its first point, so 150 is the middle of the square's right edge. It is drawn on
+/// the right wall only while that wall faces the viewer, within it.
+#[test]
+fn a_side_graphic_lies_on_the_wall_it_names_while_that_wall_is_seen() {
+    let d = document();
+    let graphic = json!([{"symbol": "Mark", "face": "side", "x": 150.0, "y": 0.0}]);
+    let mut seen = vec![];
+    for turn in [-40.0, 40.0] {
+        let n = object(EXTRUDE, json!({"rotationY": turn, "graphics": graphic}));
+        let art = solid_art_in(Some(&d), &n).unwrap();
+        let parts = red_parts(&art);
+        if !parts.is_empty() {
+            // Within the right wall: to the right of the front cap's left half.
+            let b = parts.iter().filter_map(|p| p.bounds()).reduce(|a, c| a.union(c)).unwrap();
+            let all = art.visual_bounds().unwrap();
+            assert!(b.x0 > all.center().x, "{b:?} in {all:?}");
+            assert!(b.width() > 1.0 && b.height() > 1.0);
+        }
+        seen.push(!parts.is_empty());
+    }
+    assert_eq!(seen.iter().filter(|s| **s).count(), 1, "seen from one side only: {seen:?}");
+    // At x = 50 the graphic is on the top wall, seen when the object tips one way and not the other.
+    let top = json!([{"symbol": "Mark", "face": "side", "x": 50.0}]);
+    let seen: Vec<bool> = [-40.0, 40.0]
+        .into_iter()
+        .map(|turn| !red_parts(&solid_art_in(Some(&d), &object(EXTRUDE, json!({"rotationX": turn, "graphics": top}))).unwrap()).is_empty())
+        .collect();
+    assert_eq!(seen.iter().filter(|s| **s).count(), 1, "{seen:?}");
+}
+
+#[test]
+fn side_graphics_are_checked_and_kept_only_by_extrude() {
+    let g = MappedGraphic::from_value(&json!({"symbol": "Mark", "face": "side", "x": 3.0})).unwrap();
+    assert!(g.side && g.face == PlanarFace::Front);
+    assert_eq!(g.to_value()["face"], json!("side"));
+    assert_eq!(MappedGraphic::from_value(&g.to_value()).unwrap(), g);
+    let p = json!({"graphics": [{"symbol": "Mark", "face": "side"}]});
+    assert!(validate_three_d_params(EXTRUDE, &p).is_ok());
+    for id in [ROTATE, crate::REVOLVE] {
+        assert!(validate_three_d_params(id, &p).is_err(), "{id}");
+    }
+    let mixed = json!({"graphics": [{"symbol": "Mark", "face": "side"}, {"symbol": "Mark"}]});
+    for to in [ROTATE, crate::REVOLVE] {
+        let kept = three_d_params_as(EXTRUDE, &mixed, to);
+        assert_eq!(kept["graphics"].as_array().map(Vec::len), Some(1), "{to}");
+    }
+    assert_eq!(three_d_params_as(EXTRUDE, &mixed, EXTRUDE)["graphics"].as_array().map(Vec::len), Some(2));
+    // A side graphic has no handle on a cap.
+    let d = document();
+    let n = object(EXTRUDE, mixed);
+    let frame = graphic_frame(Some(&d), &n, None).unwrap();
+    assert!(frame.handle(&g).is_none());
 }

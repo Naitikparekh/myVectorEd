@@ -211,6 +211,7 @@ impl<'a> Builder<'a> {
             side: false,
             away: behind,
             end: None,
+            surface: None,
             plane,
             #[cfg(test)]
             view,
@@ -249,7 +250,7 @@ impl<'a> Builder<'a> {
     /// wall with `cuts` (see [`cuts`]) as `cuts[i]` quads along edge `i`. `outward` is the
     /// direction (before rotation) the band faces away from the solid, for orienting normals.
     pub(super) fn band(&mut self, a: &[V3], b: &[V3], cuts: &[usize], outward: impl Fn(usize) -> V3) -> Result<(), String> {
-        self.curved_band(a, b, cuts, outward, None)
+        self.curved_band(a, b, cuts, outward, None, None)
     }
 
     /// [`Builder::band`], with `curves` the pieces of curve the rings' edges follow and the
@@ -261,6 +262,7 @@ impl<'a> Builder<'a> {
         cuts: &[usize],
         outward: impl Fn(usize) -> V3,
         mut curves: Option<WallCurves>,
+        unrolled: Option<Unrolled>,
     ) -> Result<(), String> {
         let n = a.len().min(b.len());
         // At 0 and 1, the corners themselves.
@@ -295,6 +297,15 @@ impl<'a> Builder<'a> {
                     && let Some(f) = self.facets.last_mut()
                 {
                     f.side = true;
+                    // Where the quad's corners lie on the unrolled sides ([`Facet::surface`]).
+                    if let Some(u) = &unrolled
+                        && let (Some(&u0), Some(&u1), Some(page)) = (u.along.get(i), u.along.get(i + 1), f.contours.first())
+                        && page.len() == 4
+                    {
+                        let (x0, x1) = (u0 + (u1 - u0) * s0, u0 + (u1 - u0) * s1);
+                        let uv = vec![Point::new(x0, u.depth.0), Point::new(x1, u.depth.0), Point::new(x1, u.depth.1), Point::new(x0, u.depth.1)];
+                        f.surface = Some(crate::SurfaceCell { page: page.clone(), uv, outward: !f.away });
+                    }
                 }
                 if let Some(w) = curves.as_mut().filter(|_| pieces == 1)
                     && let Some(span) = w.spans.get(i).copied().flatten()
@@ -667,7 +678,11 @@ pub(crate) fn extrude_faces(path: &PathData, rule: FillRule, bounds: Rect, optio
         })
         .collect();
     let mut budget = Budget::default();
-    for ((ring, traced), pieces) in rings.iter().zip(&traced).zip(&pieces) {
+    let longest = (0..rings.len()).max_by(|a, c| {
+        let length = |k: usize| rings.get(k).and_then(|r| along_ring(r).last().copied()).unwrap_or(0.0);
+        length(*a).total_cmp(&length(*c))
+    });
+    for (r, ((ring, traced), pieces)) in rings.iter().zip(&traced).zip(&pieces).enumerate() {
         let placed: Vec<Vec<V3>> = steps.iter().map(|s| ring_at(ring, s)).collect();
         for (k, pair) in placed.windows(2).enumerate() {
             let ([a, c], Some(s0), Some(s1)) = (pair, steps.get(k), steps.get(k + 1)) else { continue };
@@ -684,7 +699,9 @@ pub(crate) fn extrude_faces(path: &PathData, rule: FillRule, bounds: Rect, optio
             // stay straight, within the sampling tolerance.
             let (near, far) = (along.get(k).filter(|_| k == 0), along.get(k + 1).filter(|_| k + 2 == steps.len()));
             let curves = (near.is_some() || far.is_some()).then(|| WallCurves { spans: &traced.spans, near, far, budget: &mut budget });
-            b.curved_band(a, c, pieces, |i| outward(ring, i, face), curves)?;
+            // The longest outline's bands carry where they lie on the unrolled sides.
+            let unrolled = (Some(r) == longest).then(|| Unrolled { along: along_ring(ring), depth: (z(s0.t), z(s1.t)) });
+            b.curved_band(a, c, pieces, |i| outward(ring, i, face), curves, unrolled)?;
         }
     }
     if o.cap {
@@ -758,4 +775,33 @@ pub(super) fn edge_distance(rings: &[Vec<Point>], p: Point) -> f64 {
         .flat_map(|r| r.iter().zip(r.iter().cycle().skip(1)).take(r.len()))
         .map(|(a, b)| segment_distance(p, *a, *b))
         .fold(f64::INFINITY, f64::min)
+}
+
+/// Where the bands of one outline lie on Extrude & Bevel's sides unrolled flat ([`Facet::surface`]):
+/// where each of its points lies along it ([`along_ring`], one more entry than the points), and the
+/// depth of the band's two rings from the middle of the extrusion, toward the front.
+pub(super) struct Unrolled {
+    along: Vec<f64>,
+    depth: (f64, f64),
+}
+
+/// Where each point of closed outline `ring` lies along it, and the whole length round as the last
+/// entry: the length from its first point clockwise as the front is seen (y down), so that with y
+/// toward the front a graphic on a wall seen from outside reads the right way round. On an outline
+/// drawn counterclockwise the lengths run from the whole length down to 0.
+fn along_ring(ring: &[Point]) -> Vec<f64> {
+    let mut out = Vec::with_capacity(ring.len() + 1);
+    let mut total = 0.0;
+    out.push(0.0);
+    for (k, p) in ring.iter().enumerate() {
+        let next = ring.get((k + 1) % ring.len().max(1)).copied().unwrap_or(*p);
+        total += p.distance(next);
+        out.push(total);
+    }
+    if signed_area(ring) < 0.0 {
+        for v in &mut out {
+            *v = total - *v;
+        }
+    }
+    out
 }
