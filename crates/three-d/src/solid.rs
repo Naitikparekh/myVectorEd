@@ -379,7 +379,7 @@ impl Facet {
 
     /// Revolve's face `face` as a facet: its polygon, curved outline, depth, plane, normal and lighting.
     /// A face that joins the profile's ends round the axis is a side; a cap is an end.
-    pub(crate) fn of_face(face: crate::Face) -> Self {
+    pub fn of_face(face: crate::Face) -> Self {
         Facet {
             contours: vec![face.points],
             depth: face.depth,

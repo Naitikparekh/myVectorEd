@@ -494,8 +494,8 @@ file is left out.
 ## Ray tracing
 
 The public [Render 3D vector artwork](https://helpx.adobe.com/illustrator/desktop/special-effects-styles/create-3d-graphics/render-3d-vector-artwork.html)
-page describes turning on Ray Tracing and choosing its Quality. Extrude & Bevel, Inflate and Rotate take them in
-`render`: `rayTracing` (true or false, default false) and `quality` (`low`, `medium` the default, or `high`).
+page describes turning on Ray Tracing and choosing its Quality. Extrude & Bevel, Inflate, Rotate and Revolve take
+them in `render`: `rayTracing` (true or false, default false) and `quality` (`low`, `medium` the default, or `high`).
 Ray traced, the effect draws one image of its solids in place of the shaded vector faces (VectorCraft's own
 renderer):
 
@@ -503,9 +503,10 @@ renderer):
   where the vector faces are sorted whole. Extrude & Bevel keeps its faces turned away from the viewer for this,
   so they hide nothing but can cast shadows.
 - Each sample is lit as the faces are ([Materials](#materials), [Lighting](#lighting)): without a material,
-  colored Inflate keeps its smooth light ramps and other faces their flat shading; with one, the material shades
-  it. A ray toward each light finds whether another face blocks it, so the solids shadow themselves and each
-  other; a light's Softness spreads its rays over a cone up to 0.35 rad wide, so its shadow is soft. Only direct
+  colored Inflate and Revolve keep their smooth light ramps and other faces their flat shading; with one, the
+  material shades it. A ray toward each light finds whether another face blocks it, so the solids shadow
+  themselves and each other; on a smoothly lit face the blocked share of each light's direct light, as it falls on
+  the face's own plane, is taken from its light ramp; a light's Softness spreads its rays over a cone up to 0.35 rad wide, so its shadow is soft. Only direct
   light is traced: faces do not reflect onto each other.
 - Low takes 1 pixel a point and one sample a pixel; Medium 2 pixels a point and 2 × 2 samples; High 3 pixels a
   point and 3 × 3 samples, and soft lights take 4 or 9 rays. The image holds at most 4,000,000 pixels (fewer a
@@ -513,8 +514,11 @@ renderer):
   budget of facet tests past which the image has no cast shadows. These values are our own.
 - A solid in a solid color takes its color, in a gradient the gradient's middle color; a pattern's solid is left
   out. Each solid's opacity applies to its pixels; blending modes do not. The shadow behind or below the object
-  ([Shadows](#shadows)) stays a vector shape under the image. Wireframe mode wins over ray tracing. Revolve
-  takes the settings in `render` but is not ray traced.
+  ([Shadows](#shadows)) stays a vector shape under the image. Wireframe mode wins over ray tracing.
+- Revolve is ray traced when the effect is on the object, or on a group or layer (every member's surface in one
+  image, about the shared axis); a Revolve on a fill or stroke draws its vector faces. Revolve (Classic) is not
+  ray traced. The members' own opacity masks and blending modes do not apply to the image, and graphics are not
+  drawn in it.
 
 ## Graphics
 
@@ -639,6 +643,7 @@ pages, and the archived Extrude & Bevel option list (depth 0–2,000, cap on/off
 out, perspective). No Adobe software, assets, presets or bevel shapes were used.
 
 - **Materials**: base materials (Roughness, Metallic, base color) are built ([Materials](#materials)); Adobe
+  Substance materials, the panel's material thumbnails, and graphics on Inflate are not built (ray tracing is [built](#ray-tracing), and shadows
   Substance materials, the panel's material thumbnails, and ray tracing of Revolve are not built (ray tracing of the other three is [built](#ray-tracing), and shadows
   of every light are opt-in, `shadowLights`): vector shading uses directional
   lights, in the paint of the fill or stroke the solid is built for ([Fills and strokes](#fills-and-strokes)), and
@@ -699,6 +704,7 @@ Release measurements and a repeatable CLI scene are in [3D lighting performance]
 
 | Date | Change |
 |---|---|
+| 2026-11-19 | Ray tracing of Revolve, on an object or a group, with each face's smooth light; smoothly lit faces now take shadows in the traced image too ([Ray tracing](#ray-tracing)). |
 | 2026-11-19 | Graphics on Inflate: a front graphic follows the puffed front, cut into the pieces it covers and drawn right after each one, under white and colored lights; changing the type to Inflate keeps the front's graphics ([Graphics](#graphics)). |
 | 2026-11-19 | Graphics on Extrude & Bevel's sides: `face: "side"` maps a symbol onto the walls and bevels unrolled flat (X along the outline clockwise, Y along the depth toward the front), each facet drawing its part right after itself ([Graphics](#graphics)). |
 | 2026-11-18 | Ray tracing: `render.rayTracing` and `render.quality` draw Extrude & Bevel, Inflate and Rotate as one traced image, with per-sample depth (exact visibility), per-sample materials and soft shadows the solids cast on themselves and each other ([Ray tracing](#ray-tracing)). |
