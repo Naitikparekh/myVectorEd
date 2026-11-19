@@ -153,7 +153,7 @@ pub use document::{
 };
 pub(crate) use document::{slot_frame, slot_of};
 use graph::Graph;
-pub(crate) use ops::{read_art_style, read_style_list, style_moves_with};
+pub(crate) use ops::{read_art_style, read_stacked_art_style, read_style_list, style_moves_with};
 #[cfg(test)]
 pub(crate) use raster::with_image_limits;
 pub(crate) use types::MAX_NODES;
