@@ -240,6 +240,8 @@ fn inflated(p: Puff, bounds: Rect, o: Inflate, view: View, reach: f64, keep: Kee
         if n.dot(n) > 0.5 { n } else { V3(0.0, 0.0, 1.0) }
     };
     let smooth = view.shade && view.has_colored_lights();
+    // The front's graphics are placed about the center of the object's bounds, as on a cap.
+    let centre = bounds.center().to_vec2();
     let camera = Camera::new(view, bounds, o.depth + 2.0 * height.max(reach));
     // Without its back cap the object is a shell open behind, its inside showing.
     let mut b = Builder::new(&camera, o.cap, false, keep);
@@ -416,7 +418,9 @@ fn inflated(p: Puff, bounds: Rect, o: Inflate, view: View, reach: f64, keep: Kee
                     {
                         for points in triangles {
                             let front = points.map(|q| camera.place(q, half + lift(q)));
+                            let before = b.len();
                             b.smooth_triangle(front, points.map(|q| camera.rotate(normal(q))), false)?;
+                            b.surface(before, points.iter().map(|q| *q - centre).collect());
                             if o.both_sides && o.cap {
                                 let back = points.map(|q| camera.place(back_turn.apply(q), -half - lift(q) * back_turn.scale));
                                 let normals = points.map(|q| {
@@ -438,7 +442,11 @@ fn inflated(p: Puff, bounds: Rect, o: Inflate, view: View, reach: f64, keep: Kee
                         pieces.iter().zip(&lifts).map(|(p, h)| p.iter().zip(h).map(|(q, h)| camera.place(*q, half + h)).collect()).collect();
                     let n = newell(&front);
                     let order = if flat { Order::Last } else { Order::Depth };
+                    let before = b.len();
                     b.face(front, n, order)?;
+                    if let [piece] = pieces.as_slice() {
+                        b.surface(before, piece.iter().map(|q| *q - centre).collect());
+                    }
                     if o.both_sides && o.cap {
                         // The back winds the same way round as the front, so its outward normal is
                         // reversed.
