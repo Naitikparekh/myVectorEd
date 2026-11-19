@@ -2514,3 +2514,28 @@ fn confined_svg_output_checks_the_images_drawn_for_pixel_effects() {
     let e = confine(roots.as_ref(), || s.execute("document.serialize", &json!({"format": "svg"}))).unwrap_err().to_string();
     assert!(e.contains("a linked image file is outside the read roots"), "{e}");
 }
+
+/// An effect applied to a linked image goes on an embedded copy: the image is embedded (keeping
+/// its pixels) and takes the effect in one undo step, which undo takes back to the linked image
+/// without the effect
+/// (<https://helpx.adobe.com/illustrator/desktop/special-effects-styles/apply-filter-effects/apply-and-modify-effects.html>).
+#[test]
+fn an_effect_on_a_linked_image_embeds_it_first() {
+    let dir = Folder::new("effect-embeds");
+    let pic = dir.file("pic.png");
+    write(&pic, &png(40, 30, RED));
+    let mut s = session();
+    let id = place(&mut s, &pic);
+    assert!(image(&s, id).link.is_some());
+    let steps = s.doc().unwrap().history.undo.len();
+    s.execute("effect.apply", &json!({"effect": "blur.gaussian", "params": {"radius": 2}, "ids": [id.0]})).unwrap();
+    let n = s.doc().unwrap().doc.node(id).cloned().unwrap();
+    let NodeKind::Image(im) = &n.kind else { panic!("still an image") };
+    assert!(im.link.is_none(), "the image is embedded");
+    assert_eq!(n.appearance.effects.len(), 1);
+    assert!(s.doc().unwrap().doc.images.get(&im.key).is_some(), "it keeps its pixels");
+    assert_eq!(s.doc().unwrap().history.undo.len(), steps + 1, "one undo step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(image(&s, id).link.is_some(), "undo leaves it linked");
+    assert!(s.doc().unwrap().doc.node(id).unwrap().appearance.effects.is_empty());
+}
