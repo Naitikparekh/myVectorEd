@@ -50,7 +50,7 @@ const MAX_NESTING: usize = 8;
 const MAX_LEVELS: usize = 4 * vectorcraft_doc::MAX_DEPTH;
 
 /// The error for graphics on a 3D effect that takes none.
-pub const NOT_TAKEN: &str = "Graphics map onto the Plane, Extrude and Revolve object types";
+pub const NOT_TAKEN: &str = "Graphics map onto the Plane, Extrude, Revolve and Inflate object types";
 
 /// The buckets around the unrolled side surface that the pieces of Revolve's graphics are sorted
 /// into, so each face looks only at the pieces near it.
@@ -161,7 +161,7 @@ impl MappedGraphic {
 /// The 3D effects that take graphics: Extrude & Bevel (its caps), Rotate (the plane) and Revolve
 /// (its swept side).
 pub fn takes_graphics(id: &str) -> bool {
-    id == super::EXTRUDE || id == super::ROTATE || id == crate::REVOLVE
+    id == super::EXTRUDE || id == super::ROTATE || id == crate::REVOLVE || id == super::INFLATE
 }
 
 /// The graphics in parameters `p`, leaving out entries that are not valid (a file may hold
@@ -201,6 +201,9 @@ pub fn validate(id: &str, p: &Value) -> Result<(), String> {
         }
         if g.side && id != super::EXTRUDE {
             return Err("Only Extrude & Bevel maps graphics onto its sides".into());
+        }
+        if id == super::INFLATE && g.face == PlanarFace::Back {
+            return Err("Inflate maps graphics onto its front".into());
         }
     }
     Ok(())
@@ -681,10 +684,20 @@ pub(crate) fn surface_parts(
     let mut triangle_id = 0usize;
     for (face, parts) in faces.iter().zip(out.iter_mut()) {
         let Some(cell) = face.surface.as_ref().filter(|c| c.outward && !face.cap) else { continue };
-        if cell.uv.len() != cell.page.len() || !(3..=4).contains(&cell.uv.len()) {
+        if cell.uv.len() != cell.page.len() || cell.uv.len() < 3 {
             continue;
         }
-        let triangles: &[[usize; 3]] = if cell.uv.len() == 3 { &[[0, 1, 2]] } else { &[[0, 1, 2], [0, 2, 3]] };
+        // A piece of Inflate's front can have more corners: it is cut into triangles by its ears.
+        let ears;
+        let triangles: &[[usize; 3]] = match cell.uv.len() {
+            3 => &[[0, 1, 2]],
+            4 => &[[0, 1, 2], [0, 2, 3]],
+            _ => {
+                let Some(t) = ear_triangles(&cell.uv) else { continue };
+                ears = t;
+                &ears
+            }
+        };
         for corners in triangles {
             triangle_id += 1;
             let pick = |of: &[Point]| corners.iter().map(|k| of.get(*k).copied()).collect::<Option<Vec<Point>>>();
@@ -1110,17 +1123,63 @@ fn as_face(f: &Facet) -> vectorcraft_three_d::Face {
     }
 }
 
-/// The parts of the graphics on Extrude & Bevel's sides (`side` graphics) that fall on each of
-/// `facets`, for an object with id `id`: for each facet, the nodes to draw right after it. Only
-/// walls and bevels of the longest outline turned toward the viewer carry a part
-/// ([`vectorcraft_three_d::Facet::surface`]); each part is cut to its facet and shaded with its
-/// light. `None` past the limits of [`surface_parts`]: the solid then draws without them.
-pub(crate) fn side_parts(doc: Option<&Document>, id: NodeId, graphics: &[MappedGraphic], facets: &[Facet]) -> Option<Vec<Vec<Arc<Node>>>> {
-    if !graphics.iter().any(|g| g.side) || !facets.iter().any(|f| f.surface.is_some()) {
+/// The parts of graphics that fall on each of `facets`, for an object with id `id`: for each facet,
+/// the nodes to draw right after it. With `side` the graphics are those on Extrude & Bevel's sides,
+/// drawn on the walls and bevels of its longest outline; without, those of Inflate's front, drawn on
+/// the pieces of its puffed front. Only facets turned toward the viewer that know where they lie
+/// ([`vectorcraft_three_d::Facet::surface`]) carry a part; each part is cut to its facet and
+/// shaded with its light. `None` when no such graphic or facet is there, or past the limits of
+/// [`surface_parts`]: the solid then draws without them.
+pub(crate) fn facet_parts(
+    doc: Option<&Document>,
+    id: NodeId,
+    graphics: &[MappedGraphic],
+    facets: &[Facet],
+    side: bool,
+) -> Option<Vec<Vec<Arc<Node>>>> {
+    if !graphics.iter().any(|g| g.side == side && g.face == PlanarFace::Front) || !facets.iter().any(|f| f.surface.is_some()) {
         return None;
     }
     let faces: Vec<vectorcraft_three_d::Face> = facets.iter().map(as_face).collect();
     let shade = |face: &vectorcraft_three_d::Face, c: vectorcraft_doc::color::Color| Paint::solid(crate::lighting::shade(c, face.illumination));
     let mut copies = 0usize;
-    surface_parts(doc, id, graphics, &faces, &shade, &mut copies, true)
+    surface_parts(doc, id, graphics, &faces, &shade, &mut copies, side)
+}
+
+/// The most corners a face may have for [`ear_triangles`] to cut it.
+const MAX_EAR_CORNERS: usize = 128;
+
+/// Simple polygon `ring` cut into triangles by clipping its ears, as indices into it. `None` for a
+/// polygon of fewer than 3 or more than [`MAX_EAR_CORNERS`] corners, with no area, or one that has
+/// no ear left to clip (it crosses itself).
+fn ear_triangles(ring: &[Point]) -> Option<Vec<[usize; 3]>> {
+    if ring.len() < 3 || ring.len() > MAX_EAR_CORNERS {
+        return None;
+    }
+    let area: f64 = ring.iter().zip(ring.iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum::<f64>() / 2.0;
+    if !area.is_finite() || area.abs() < 1e-12 {
+        return None;
+    }
+    let sign = area.signum();
+    let cross = |o: Point, a: Point, b: Point| (a - o).cross(b - o) * sign;
+    let mut left: Vec<usize> = (0..ring.len()).collect();
+    let mut out = Vec::with_capacity(ring.len() - 2);
+    while left.len() > 3 {
+        let n = left.len();
+        let ear = (0..n).find(|&k| {
+            let (i, j, l) = (left[(k + n - 1) % n], left[k], left[(k + 1) % n]);
+            let (Some(&a), Some(&b), Some(&c)) = (ring.get(i), ring.get(j), ring.get(l)) else { return false };
+            cross(a, b, c) > 1e-12
+                && left
+                    .iter()
+                    .filter(|&&m| m != i && m != j && m != l)
+                    .all(|&m| ring.get(m).is_none_or(|&p| !(cross(a, b, p) >= 0.0 && cross(b, c, p) >= 0.0 && cross(c, a, p) >= 0.0)))
+        })?;
+        out.push([left[(ear + n - 1) % n], left[ear], left[(ear + 1) % n]]);
+        left.remove(ear);
+    }
+    if let [a, b, c] = left.as_slice() {
+        out.push([*a, *b, *c]);
+    }
+    Some(out)
 }

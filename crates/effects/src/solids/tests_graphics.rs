@@ -504,7 +504,7 @@ fn graphics_are_checked() {
         assert!(check(EXTRUDE, bad.clone()).is_err(), "{bad}");
     }
     assert!(check(ROTATE, json!([{"symbol": "Mark", "face": "back"}])).is_err());
-    assert!(check(INFLATE, json!([{"symbol": "Mark"}])).is_err());
+    assert!(check(INFLATE, json!([{"symbol": "Mark", "face": "back"}])).is_err());
     // Revolve takes graphics on its side, named the front; Revolve (Classic) takes none.
     assert!(validate_three_d_params(crate::REVOLVE, &json!({"graphics": [{"symbol": "Mark"}]})).is_ok());
     assert!(validate_three_d_params(crate::REVOLVE, &json!({"graphics": [{"symbol": "Mark", "face": "back"}]})).is_err());
@@ -992,4 +992,64 @@ fn side_graphics_are_checked_and_kept_only_by_extrude() {
     let n = object(EXTRUDE, mixed);
     let frame = graphic_frame(Some(&d), &n, None).unwrap();
     assert!(frame.handle(&g).is_none());
+}
+
+/// A graphic on Inflate's front follows the puffed surface: it is cut into the pieces of the front
+/// it covers, each drawn right after its piece, around the center of the object when its offset is
+/// 0, and under a colored light too, where each piece takes the light that falls on it.
+#[test]
+fn a_front_graphic_on_inflate_follows_the_puffed_front() {
+    let d = document();
+    let graphic = json!([{"symbol": "Mark", "scale": 300.0}]);
+    let plain = solid_art_in(Some(&d), &object(INFLATE, json!({}))).unwrap();
+    assert!(red_parts(&plain).is_empty());
+    for (rx, ry) in [(0.0, 0.0), (-25.0, 30.0)] {
+        let n = object(INFLATE, json!({"rotationX": rx, "rotationY": ry, "graphics": graphic}));
+        let art = solid_art_in(Some(&d), &n).unwrap();
+        let parts = red_parts(&art);
+        assert!(parts.len() > 1, "cut into several pieces: {}", parts.len());
+        let b = parts.iter().filter_map(|p| p.bounds()).reduce(|a, c| a.union(c)).unwrap();
+        let all = art.visual_bounds().unwrap();
+        assert!(all.contains(b.center()) && b.width() < all.width() / 2.0, "{b:?} in {all:?}");
+        if (rx, ry) == (0.0, 0.0) {
+            // Seen straight on, the 30 pt graphic covers 30 pt about the center.
+            assert!((b.center() - Point::new(50.0, 50.0)).hypot() < 1.0 && (b.width() - 30.0).abs() < 1.0, "{b:?}");
+        }
+    }
+    // Under a colored light the solid draws a face for each piece, and the graphic's parts are
+    // drawn lit: more nodes than the surface without it.
+    let count = |n: &Node| {
+        let mut k = 0;
+        n.walk(&mut |_| k += 1);
+        k
+    };
+    let colored = |g: Value| object(INFLATE, json!({"shade": true, "lightColor": "#ffcc88", "graphics": g}));
+    let without = solid_art_in(Some(&d), &colored(json!([]))).unwrap();
+    let with = solid_art_in(Some(&d), &colored(graphic)).unwrap();
+    assert!(count(&with) > count(&without));
+}
+
+#[test]
+fn inflate_takes_graphics_on_its_front_only() {
+    assert!(validate_three_d_params(INFLATE, &json!({"graphics": [{"symbol": "Mark"}]})).is_ok());
+    for face in ["back", "side"] {
+        assert!(validate_three_d_params(INFLATE, &json!({"graphics": [{"symbol": "Mark", "face": face}]})).is_err(), "{face}");
+    }
+    let all = json!({"graphics": [{"symbol": "Mark"}, {"symbol": "Mark", "face": "back"}, {"symbol": "Mark", "face": "side"}]});
+    let kept = three_d_params_as(EXTRUDE, &all, INFLATE);
+    assert_eq!(kept["graphics"], json!([{"symbol": "Mark"}]));
+}
+
+#[test]
+fn ear_clipping_cuts_a_concave_piece_into_triangles_inside_it() {
+    // An L: its reflex corner must not be clipped as an ear.
+    let l = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0), (10.0, 20.0), (0.0, 20.0)].map(|(x, y)| Point::new(x, y));
+    for ring in [l.to_vec(), l.iter().rev().copied().collect()] {
+        let t = ear_triangles(&ring).unwrap();
+        assert_eq!(t.len(), ring.len() - 2);
+        let area: f64 = t.iter().map(|[a, b, c]| ((ring[*b] - ring[*a]).cross(ring[*c] - ring[*a]) / 2.0).abs()).sum();
+        assert!((area - 300.0).abs() < 1e-9, "the triangles cover the L exactly once: {area}");
+    }
+    assert!(ear_triangles(&l[..2]).is_none());
+    assert!(ear_triangles(&[Point::ZERO, Point::new(1.0, 1.0), Point::new(2.0, 2.0)]).is_none(), "no area");
 }

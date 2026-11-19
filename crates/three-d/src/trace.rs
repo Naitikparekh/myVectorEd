@@ -343,19 +343,28 @@ pub fn trace(faces: &[TraceFace], view: &View, quality: TraceQuality) -> Option<
                     let Some((i, _)) = nearest(&prepared, &grid, p) else { continue };
                     let Some(f) = prepared.get(i) else { continue };
                     let face = f.face;
+                    for (v, rays) in visibility.iter_mut().zip(&rays) {
+                        *v = 1.0;
+                        if shadows_on && let Some(from) = view_point(face.facet, p) {
+                            let open = rays.iter().filter(|dir| !shadows.blocked(i, from, **dir)).count();
+                            *v = open as f64 / rays.len().max(1) as f64;
+                        }
+                    }
                     let rgb = if face.smooth
                         && let Some(g) = face.facet.rgb_gradient
                     {
-                        let l = g.at(p);
-                        std::array::from_fn(|c| face.color[c] * l[c])
-                    } else {
-                        for (v, rays) in visibility.iter_mut().zip(&rays) {
-                            *v = 1.0;
-                            if shadows_on && let Some(from) = view_point(face.facet, p) {
-                                let open = rays.iter().filter(|dir| !shadows.blocked(i, from, **dir)).count();
-                                *v = open as f64 / rays.len().max(1) as f64;
+                        // The smooth light, less the share of each light's direct light that is
+                        // blocked, as it falls on the face's own plane.
+                        let mut l = g.at(p);
+                        let n = V3(face.facet.normal[0], face.facet.normal[1], face.facet.normal[2]);
+                        for (light, v) in lights.iter().zip(&visibility) {
+                            let blocked = (1.0 - v) * light.direct(n);
+                            for (c, lc) in l.iter_mut().enumerate() {
+                                *lc = (*lc - blocked * light.color.get(c).copied().unwrap_or(1.0)).clamp(0.0, 1.0);
                             }
                         }
+                        std::array::from_fn(|c| face.color[c] * l[c])
+                    } else {
                         face.material.shade_lit(view, face.facet.normal, face.color, &visibility)
                     };
                     let a = face.alpha.clamp(0.0, 1.0);
@@ -501,17 +510,34 @@ mod tests {
         // The top of the short arm: near the tall arm it is in the arm's shadow, far from it lit.
         let top: Vec<&Facet> = facets.iter().filter(|f| !f.away && f.side && f.normal[1] < -0.5).collect();
         assert!(!top.is_empty(), "the short arm's top is seen");
-        let row = |x: f64| {
+        let row = |t: &Traced, x: f64| {
             // Down the drawing from the top of the image, the first pixel of an upward face at x.
             (0..t.height).find_map(|y| {
                 let p = Point::new(x, t.origin.y + (y as f64 + 0.5) / t.scale);
                 let on_top = top.iter().any(|f| inside(&f.contours, p));
-                on_top.then(|| pixel(&t, p))
+                on_top.then(|| pixel(t, p))
             })
         };
-        let near = row(24.0).unwrap();
-        let far = row(95.0).unwrap();
+        let near = row(&t, 24.0).unwrap();
+        let far = row(&t, 95.0).unwrap();
         assert!(near[0] < far[0], "shadowed {near:?} vs lit {far:?}");
+        // A smoothly lit face is shadowed too: its light ramp loses the blocked light's share.
+        let smooth: Vec<Facet> = facets
+            .iter()
+            .cloned()
+            .map(|mut f| {
+                let p = f.contours[0][0];
+                f.rgb_gradient =
+                    Some(crate::RgbGradient { channels: f.illumination.map(|v| crate::ShadeGradient { start: p, end: p, brightness: [v, v] }) });
+                f
+            })
+            .collect();
+        let faces: Vec<TraceFace> =
+            smooth.iter().map(|facet| TraceFace { facet, color: [0.8, 0.2, 0.1], alpha: 1.0, material: MATTE, smooth: true }).collect();
+        let t = trace(&faces, &view, TraceQuality::Low).unwrap();
+        let near = row(&t, 24.0).unwrap();
+        let far = row(&t, 95.0).unwrap();
+        assert!(near[0] < far[0], "smooth: shadowed {near:?} vs lit {far:?}");
     }
 
     #[test]

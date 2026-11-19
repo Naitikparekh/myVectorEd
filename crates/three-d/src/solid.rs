@@ -296,6 +296,8 @@ pub struct Facet {
     /// The planar end of the solid the facet is: Extrude & Bevel's front or back cap, or a plane
     /// (its front). `None` for every other facet.
     pub end: Option<PlanarFace>,
+    /// For a piece of Inflate's front: where its corners lie on the art, as the offset from the
+    /// center of the bounds the solid is built with, for a graphic mapped onto the puffed front.
     /// For a wall or bevel facet of Extrude & Bevel's longest outline: where its corners lie on the
     /// sides unrolled flat, for a graphic mapped onto the sides. x is the length along the outline
     /// (before any inset of a bevel) from its first point, clockwise as the front is seen, and y
@@ -377,7 +379,7 @@ impl Facet {
 
     /// Revolve's face `face` as a facet: its polygon, curved outline, depth, plane, normal and lighting.
     /// A face that joins the profile's ends round the axis is a side; a cap is an end.
-    pub(crate) fn of_face(face: crate::Face) -> Self {
+    pub fn of_face(face: crate::Face) -> Self {
         Facet {
             contours: vec![face.points],
             depth: face.depth,

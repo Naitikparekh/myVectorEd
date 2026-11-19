@@ -949,9 +949,18 @@ fn art(doc: Option<&Document>, n: &Node, expand: bool) -> Option<Node> {
         let paints = solid_paints(n);
         let item = surface_item(&paints)?;
         let expand = expand && !n.appearance.effects.iter().skip(index + 1).any(|e| e.visible && is_geometry(&e.id));
+        let traced = crate::solids::traced::RevolveSurface { path: &path, options: rule_options(fx, rule), item, member: 1.0 };
         if crate::solids::renders_wireframe(fx) {
             // In wireframe mode the edges of the faces, with no shadow.
             children.push(wire_art(n.id, [(&path, rule)], path.bounds()?, fx, fx_options(fx))?);
+        } else if let Some(b) = path.bounds()
+            && let Some(image) = crate::solids::traced::revolve_traced(n.id, fx, std::slice::from_ref(&traced), b)
+        {
+            // Ray traced: one image of the surface over its shadow.
+            if let Some(shadow) = shadow_of(n.id, fx, &path, item, b, rule_options(fx, rule), None).ok()? {
+                children.push(Arc::new(shadow));
+            }
+            children.push(image);
         } else {
             let (surface, kept) = object_surface(doc, n, &path, rule, fx, item, expand, &mut copies)?;
             if let Some(b) = path.bounds()
@@ -1142,6 +1151,26 @@ fn group_art(doc: Option<&Document>, n: &Node, expand: bool) -> Option<Node> {
         let paths = shapes.iter().filter(|s| surface_item(&s.items).is_some()).map(|s| (&s.path, s.rule));
         let mut art = n.clone();
         art.kind = NodeKind::Group { children: vec![wire_art(n.id, paths, b, fx, options)?], clip: false };
+        art.appearance = Appearance { effects: past_effect(&n.appearance.effects, index), ..Default::default() }.into();
+        return Some(art);
+    }
+    // Ray traced: one image of every member's surface over the shadow they cast.
+    let traced: Vec<crate::solids::traced::RevolveSurface> = shapes
+        .iter()
+        .filter_map(|s| {
+            Some(crate::solids::traced::RevolveSurface {
+                path: &s.path,
+                options: Revolve { fill_rule: s.rule, ..options },
+                item: surface_item(&s.items)?,
+                member: s.opacity,
+            })
+        })
+        .collect();
+    if let Some(image) = crate::solids::traced::revolve_traced(n.id, fx, &traced, b) {
+        let mut children = group_shadow(n.id, fx, &shapes, b, options, vec![]).ok()?;
+        children.push(image);
+        let mut art = n.clone();
+        art.kind = NodeKind::Group { children, clip: false };
         art.appearance = Appearance { effects: past_effect(&n.appearance.effects, index), ..Default::default() }.into();
         return Some(art);
     }

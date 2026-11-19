@@ -494,8 +494,8 @@ file is left out.
 ## Ray tracing
 
 The public [Render 3D vector artwork](https://helpx.adobe.com/illustrator/desktop/special-effects-styles/create-3d-graphics/render-3d-vector-artwork.html)
-page describes turning on Ray Tracing and choosing its Quality. Extrude & Bevel, Inflate and Rotate take them in
-`render`: `rayTracing` (true or false, default false) and `quality` (`low`, `medium` the default, or `high`).
+page describes turning on Ray Tracing and choosing its Quality. Extrude & Bevel, Inflate, Rotate and Revolve take
+them in `render`: `rayTracing` (true or false, default false) and `quality` (`low`, `medium` the default, or `high`).
 Ray traced, the effect draws one image of its solids in place of the shaded vector faces (VectorCraft's own
 renderer):
 
@@ -503,9 +503,10 @@ renderer):
   where the vector faces are sorted whole. Extrude & Bevel keeps its faces turned away from the viewer for this,
   so they hide nothing but can cast shadows.
 - Each sample is lit as the faces are ([Materials](#materials), [Lighting](#lighting)): without a material,
-  colored Inflate keeps its smooth light ramps and other faces their flat shading; with one, the material shades
-  it. A ray toward each light finds whether another face blocks it, so the solids shadow themselves and each
-  other; a light's Softness spreads its rays over a cone up to 0.35 rad wide, so its shadow is soft. Only direct
+  colored Inflate and Revolve keep their smooth light ramps and other faces their flat shading; with one, the
+  material shades it. A ray toward each light finds whether another face blocks it, so the solids shadow
+  themselves and each other; on a smoothly lit face the blocked share of each light's direct light, as it falls on
+  the face's own plane, is taken from its light ramp; a light's Softness spreads its rays over a cone up to 0.35 rad wide, so its shadow is soft. Only direct
   light is traced: faces do not reflect onto each other.
 - Low takes 1 pixel a point and one sample a pixel; Medium 2 pixels a point and 2 × 2 samples; High 3 pixels a
   point and 3 × 3 samples, and soft lights take 4 or 9 rays. The image holds at most 4,000,000 pixels (fewer a
@@ -513,8 +514,11 @@ renderer):
   budget of facet tests past which the image has no cast shadows. These values are our own.
 - A solid in a solid color takes its color, in a gradient the gradient's middle color; a pattern's solid is left
   out. Each solid's opacity applies to its pixels; blending modes do not. The shadow behind or below the object
-  ([Shadows](#shadows)) stays a vector shape under the image. Wireframe mode wins over ray tracing. Revolve
-  takes the settings in `render` but is not ray traced.
+  ([Shadows](#shadows)) stays a vector shape under the image. Wireframe mode wins over ray tracing.
+- Revolve is ray traced when the effect is on the object, or on a group or layer (every member's surface in one
+  image, about the shared axis); a Revolve on a fill or stroke draws its vector faces. Revolve (Classic) is not
+  ray traced. The members' own opacity masks and blending modes do not apply to the image, and graphics are not
+  drawn in it.
 
 ## Graphics
 
@@ -522,8 +526,8 @@ The public [Map artworks on 3D object](https://helpx.adobe.com/illustrator/deskt
 page describes graphics: art kept with the document and placed on single surfaces of a 3D object, and the
 [3D and Materials panel options](https://helpx.adobe.com/illustrator/desktop/special-effects-styles/create-3d-graphics/3d-materials-panel-options.html)
 page lists Graphics and Add Materials and Graphics on the Materials tab. VectorCraft maps graphics onto
-Extrude & Bevel's front and back caps and its sides, the plane of the Plane type (Rotate), and the swept side of
-Revolve, which the public page's example of a label on a bottle describes.
+Extrude & Bevel's front and back caps and its sides, the plane of the Plane type (Rotate), Inflate's puffed front,
+and the swept side of Revolve, which the public page's example of a label on a bottle describes.
 
 - The panel's **Materials** tab shows the document's graphics as thumbnails. A graphic is a document symbol, as
   the public page allows existing symbols to be used. **Add as Single Graphic** keeps the selected art as a new
@@ -565,6 +569,13 @@ These rules are VectorCraft's own:
   A part shaded under a material takes the facet's light, not the material's highlight. Ray tracing
   ([Ray tracing](#ray-tracing)) draws no graphics. The panel lists a side graphic as Front and shows no handle
   for it; X and Y move it.
+- On Inflate a graphic lies on the puffed front (its Front), placed as on a flat cap: X and Y are its center's
+  offset from the center of the object's bounds in the plane of the art. Each piece of the front turned toward the
+  viewer draws the part of the graphic above it, right after the piece, so the graphic rises and curves with the
+  surface, narrows toward the outline and is covered where the puff hides it. A piece cut by the outline into a
+  shape that crosses itself, or a piece with a hole, draws no part. Under a colored light the front draws a face
+  for each piece, so the parts can follow each piece's light. The back, the sides and a back that puffs too take
+  no graphic.
 - On Revolve a graphic lies on the swept side, which has one face (Front), unrolled flat. X runs around the axis:
   the angle from the middle of the side times the profile's distance from the axis at that point, so a graphic
   keeps its size at every distance and wraps farther around the axis where the profile comes nearer to it. Y runs
@@ -599,9 +610,10 @@ These rules are VectorCraft's own:
   past either limit. A loaded file
   draws the object without a graphic past the first limit, and without all of its graphics past the second.
 - A hollow Extrude & Bevel has no caps, so its graphics are not drawn until Cap is turned on again, and
-  `threeD.mapGraphic` refuses to map a new one onto it. Changing the type to Inflate drops the graphics, and
-  changing between Extrude, Plane and Revolve keeps them, except that Plane and Revolve drop the graphics on the
-  back cap and on the sides; on Revolve the front's graphics go on its side.
+  `threeD.mapGraphic` refuses to map a new one onto it. Changing between Extrude, Plane, Revolve and Inflate
+  keeps the graphics, except that Plane, Revolve and Inflate drop the graphics on the back cap and Plane, Revolve
+  and Inflate those on the sides; on Revolve the front's graphics go on its side, and on Inflate on its puffed
+  front.
 - `effect.apply` and `effect.setParams` refuse a graphic that names a symbol the document does not have, unless
   the effect already holds a graphic of that symbol. A graphic whose symbol is deleted is no longer drawn. Renaming a symbol renames it in the graphics that use it,
   in the layers, in the art of symbols, patterns, graph designs, brushes and opacity masks, and in graphic
@@ -615,9 +627,9 @@ These rules are VectorCraft's own:
 uses: `rotationX`, `rotationY`, `rotationZ`, `perspectiveAngle` (degrees), `shade`, `lightColor` (`#rrggbb`, default `#ffffff`), `lightIntensity` (%), `lightRotation`,
 `lightHeight` (degrees), `lightSoftness` (%), `ambient` (%, to 200), `lightBehind`. Lengths are points and scale with the object (Scale Strokes & Effects).
 Commands validate the shape and the parameters before the document changes. All four also take `lights`: null (the default, use the earlier single-light fields), or an array of one to ten objects. Each object takes `color` (opaque `#rrggbb`, white), `intensity` (0..100%, 80), `rotation` (-180..180 degrees, 125.26), `height` (0..90 degrees, 30), `softness` (0..100%, 0), and `behind` (boolean, false). Omitted settings use those defaults. An explicit list replaces the earlier single light; `ambient` and `shade` remain shared. Set `lights` to null to return to the single-light fields. Invalid lists, counts, keys and values are rejected before editing; malformed loaded lists fall back to the earlier light safely. All four take `shadow` (boolean, false), `shadowPosition` (`behind` or `below`), `shadowDistance` (0..100%, 0) and `shadowBounds` (10..400%, 100) and `shadowLights` (`first` or `all`) ([Shadows](#shadows)); values out of range are rejected before editing.
-`threeD.extrude`, `threeD.rotate` and `threeD.revolve` take `graphics` ([Graphics](#graphics)): an array of up to 64 objects, each
+`threeD.extrude`, `threeD.rotate`, `threeD.revolve` and `threeD.inflate` take `graphics` ([Graphics](#graphics)): an array of up to 64 objects, each
 with `symbol` (the name of a document symbol), `face` (`front`, `back` or `side`, default `front`; `side` is
-Extrude & Bevel's walls and bevels; `threeD.rotate` and `threeD.revolve` take `front` only), `x` and `y` (points, default 0), `scale` (1..10000%, default 100) and `rotation` (-360..360 degrees,
+Extrude & Bevel's walls and bevels; `threeD.rotate`, `threeD.revolve` and `threeD.inflate` take `front` only), `x` and `y` (points, default 0), `scale` (1..10000%, default 100) and `rotation` (-360..360 degrees,
 default 0). Other keys, values out of range and graphics on the other 3D effects are rejected before editing.
 All four take `render` ([3D and Materials panel](#3d-and-materials-panel)): an object whose `mode` is `shaded` (the
 default) or `wireframe`, with `rayTracing` and `quality` ([Ray tracing](#ray-tracing)). A `render` that is not an
@@ -631,11 +643,12 @@ pages, and the archived Extrude & Bevel option list (depth 0–2,000, cap on/off
 out, perspective). No Adobe software, assets, presets or bevel shapes were used.
 
 - **Materials**: base materials (Roughness, Metallic, base color) are built ([Materials](#materials)); Adobe
-  Substance materials, the panel's material thumbnails, graphics on Inflate, and ray tracing of Revolve are not built (ray tracing of the other three is [built](#ray-tracing), and shadows
+  Substance materials, the panel's material thumbnails, and graphics on Inflate are not built (ray tracing is [built](#ray-tracing), and shadows
+  Substance materials, the panel's material thumbnails, and ray tracing of Revolve are not built (ray tracing of the other three is [built](#ray-tracing), and shadows
   of every light are opt-in, `shadowLights`): vector shading uses directional
   lights, in the paint of the fill or stroke the solid is built for ([Fills and strokes](#fills-and-strokes)), and
-  by default only the first light casts a shadow ([Shadows](#shadows)). Graphics map onto planar faces, Extrude & Bevel's sides and
-  Revolve's side ([Graphics](#graphics)).
+  by default only the first light casts a shadow ([Shadows](#shadows)). Graphics map onto planar faces, Extrude & Bevel's sides,
+  Inflate's front and Revolve's side ([Graphics](#graphics)).
 - The bevel shapes and their names are our own; custom bevel paths are not supported.
 - Visibility is a painter's algorithm: faces of a closed solid turned away are left out, and the rest are drawn
   back to front, with a flat cap or flat back turned toward the viewer drawn after all of them. Concave solids
@@ -691,6 +704,8 @@ Release measurements and a repeatable CLI scene are in [3D lighting performance]
 
 | Date | Change |
 |---|---|
+| 2026-11-19 | Ray tracing of Revolve, on an object or a group, with each face's smooth light; smoothly lit faces now take shadows in the traced image too ([Ray tracing](#ray-tracing)). |
+| 2026-11-19 | Graphics on Inflate: a front graphic follows the puffed front, cut into the pieces it covers and drawn right after each one, under white and colored lights; changing the type to Inflate keeps the front's graphics ([Graphics](#graphics)). |
 | 2026-11-19 | Graphics on Extrude & Bevel's sides: `face: "side"` maps a symbol onto the walls and bevels unrolled flat (X along the outline clockwise, Y along the depth toward the front), each facet drawing its part right after itself ([Graphics](#graphics)). |
 | 2026-11-18 | Ray tracing: `render.rayTracing` and `render.quality` draw Extrude & Bevel, Inflate and Rotate as one traced image, with per-sample depth (exact visibility), per-sample materials and soft shadows the solids cast on themselves and each other ([Ray tracing](#ray-tracing)). |
 | 2026-11-18 | Shadows from every light: `shadowLights: "all"` lets each light that lights something cast its own shadow, blurred by its own Softness and as dark as its share of the brightest light ([Shadows](#shadows)). The default keeps the first light alone. |

@@ -94,6 +94,12 @@ pub fn three_d_params_as(from: &str, params: &Value, to: &str) -> Value {
     {
         list.retain(|g| g.get("face").and_then(Value::as_str) != Some(PlanarFace::Back.id()));
     }
+    // Inflate takes graphics on its front only.
+    if to == INFLATE
+        && let Some(Value::Array(list)) = out.get_mut(GRAPHICS)
+    {
+        list.retain(|g| g.get("face").and_then(Value::as_str) != Some(PlanarFace::Back.id()));
+    }
     // Only Extrude & Bevel has sides that take graphics.
     if to != EXTRUDE
         && let Some(Value::Array(list)) = out.get_mut(GRAPHICS)
@@ -336,8 +342,8 @@ fn validate_solid_for(doc: Option<&Document>, n: &Node, id: &str, p: &Value, at:
     validate_solid_params(id, p)?;
     if let Some(doc) = doc {
         graphics::validate_symbols(doc, p)?;
-        if id == EXTRUDE {
-            graphics::validate_surface_symbols(doc, p, true)?;
+        if id == EXTRUDE || id == INFLATE {
+            graphics::validate_surface_symbols(doc, p, id == EXTRUDE)?;
         }
     }
     let label = label_of(id);
@@ -1988,15 +1994,16 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
     // ([`in_one_order`], [`underlaid_surface`]).
     let seals: Vec<bool> = solids.iter().map(|(.., f, _)| underlaid(f, colored)).collect();
     let seal = |range: std::ops::Range<usize>| seals.get(range).is_some_and(|s| s.iter().any(|s| *s));
-    // The graphics on Extrude & Bevel's sides go on the first fill's solid whose walls are unrolled
-    // ([`graphics::side_parts`]): each part right after the wall it is drawn on.
-    let side = if fx.id == EXTRUDE && graphics_on {
+    // The graphics on Extrude & Bevel's sides, and on Inflate's puffed front, go on the first
+    // fill's solid whose facets know where they lie ([`graphics::facet_parts`]): each part right
+    // after the facet it is drawn on.
+    let side = if (fx.id == EXTRUDE || fx.id == INFLATE) && graphics_on {
         let list = mapped_graphics(&p);
         solids.iter().enumerate().find_map(|(k, (item, .., f, _))| {
             if !matches!(item, AppearanceItem::Fill(_)) || !f.iter().any(|f| f.surface.is_some()) {
                 return None;
             }
-            Some((k, graphics::side_parts(doc, n.id, &list, f)?))
+            Some((k, graphics::facet_parts(doc, n.id, &list, f, fx.id == EXTRUDE)?))
         })
     } else {
         None
@@ -2012,7 +2019,13 @@ fn surfaces_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile
             let art = if classic {
                 classic::surface(n, f, &paint, opacity, blend, &p)
             } else {
-                surface(n, f, &paint, opacity, blend, colored, split && shared.get(shape).copied().unwrap_or(false), mats.as_ref())
+                // A surface with graphics on its facets draws a face for each facet, so each takes its parts.
+                let faces = split && shared.get(shape).copied().unwrap_or(false) || side.as_ref().is_some_and(|(at, _)| *at == k);
+                surface(n, f, &paint, opacity, blend, colored, faces, mats.as_ref())
+            };
+            let art = match &side {
+                Some((at, parts)) if *at == k => with_side_parts(n.id, art, parts),
+                _ => art,
             };
             let art = match &side {
                 Some((at, parts)) if *at == k => with_side_parts(n.id, art, parts),

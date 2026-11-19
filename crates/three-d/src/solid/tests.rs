@@ -1706,3 +1706,25 @@ fn walls_carry_where_they_lie_on_the_unrolled_sides() {
     let (cells, walls) = facets.iter().filter(|f| f.side).fold((0, 0), |(c, w), f| (c + usize::from(f.surface.is_some()), w + 1));
     assert!(cells > 0 && cells < walls, "{cells} of {walls}");
 }
+
+/// Inflate's front knows where each of its pieces lies on the art, as the offset from the center of
+/// the bounds, under white light (polygons) and colored light (triangles).
+#[test]
+fn inflate_front_pieces_carry_where_they_lie_on_the_art() {
+    let b = Rect::new(100.0, 100.0, 200.0, 200.0);
+    let path = PathData::from_bezpath(&square(100.0, 100.0, 100.0));
+    let white = View { rotation_x: -20.0, rotation_y: 25.0, rotation_z: 0.0, ..View::default() };
+    let colored = View { light_color: [1.0, 0.8, 0.5], ..white };
+    for view in [white, colored] {
+        let facets = inflate(&path, FillRule::NonZero, b, Inflate::default(), view).unwrap();
+        let cells: Vec<&crate::SurfaceCell> = facets.iter().filter_map(|f| f.surface.as_ref()).collect();
+        assert!(cells.len() > 100, "{}", cells.len());
+        for c in &cells {
+            assert_eq!(c.uv.len(), c.page.len());
+            // Offsets within the square's half size about its center.
+            assert!(c.uv.iter().all(|p| p.x.abs() <= 50.0 + 1e-6 && p.y.abs() <= 50.0 + 1e-6), "{:?}", c.uv);
+        }
+        // The puffed front's middle lies at the middle of the art.
+        assert!(cells.iter().any(|c| c.uv.iter().any(|p| p.x.abs() < 5.0 && p.y.abs() < 5.0)));
+    }
+}
