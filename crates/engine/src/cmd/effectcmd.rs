@@ -516,10 +516,27 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let ids = edit_effects(s, p, item, C, &label, "Apply Effect: select objects", APPENDED, |fx, _| {
+    // An effect goes on an embedded copy of a linked image: the image is embedded first, in the
+    // same undo step.
+    let from = s.doc()?.history.undo.len();
+    let embedded = embed_linked(s, &targets)?;
+    let applied = edit_effects(s, p, item, C, &label, "Apply Effect: select objects", APPENDED, |fx, _| {
         fx.push(effect.clone());
         true
-    })?;
+    });
+    let ids = match applied {
+        Ok(ids) => ids,
+        Err(e) => {
+            if embedded {
+                // Leave the images linked, as they were.
+                super::menucmds::run_raw(s, "edit.undo", &json!({}))?;
+            }
+            return Err(e);
+        }
+    };
+    if embedded {
+        super::menucmds::squash(s, from, &label);
+    }
     // The item the effect landed on in the object whose row the item is (the first selected object
     // for the active item, which applies where it fits), and the effect's index in that object.
     let k = item.anchor(s, &ids);
@@ -531,6 +548,28 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let landed = first.and_then(|n| at.effects_item(&n.appearance, C).ok().flatten());
     let index = first.and_then(|n| n.appearance.effects_at(landed)).map_or(0, |fx| fx.len().saturating_sub(1));
     Ok(json!({ "ids": ids_json(&ids), "index": index, "item": landed }))
+}
+
+/// Embed the linked images among `targets` (Links panel › Embed Image) before an effect goes on
+/// them: "If you apply an effect to a linked bitmap, Illustrator applies it to an embedded copy
+/// instead" (<https://helpx.adobe.com/illustrator/desktop/special-effects-styles/apply-filter-effects/apply-and-modify-effects.html>).
+/// An image placed from a DCS file, whose plates print from its file, stays linked, as does one
+/// whose file can't be read while it shows its saved preview. Whether anything was embedded.
+fn embed_linked(s: &mut Session, targets: &[NodeId]) -> Result<bool> {
+    let d = &s.doc()?.doc;
+    let linked: Vec<u64> = targets
+        .iter()
+        .filter(|id| {
+            matches!(d.node(**id).map(|n| &n.kind), Some(NodeKind::Image(im))
+                if im.link.is_some() && !d.images.get(&im.key).is_some_and(vectorcraft_doc::ImageBlob::is_separated))
+        })
+        .map(|id| id.0)
+        .collect();
+    if linked.is_empty() {
+        return Ok(false);
+    }
+    let r = super::menucmds::run_raw(s, "links.embed", &json!({"ids": linked}))?;
+    Ok(r.get("embedded").and_then(Value::as_array).is_some_and(|a| !a.is_empty()))
 }
 
 /// The selected objects a Pathfinder effect should group before it applies: it combines the
