@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use vectorcraft_doc::color::Paint;
-use vectorcraft_doc::{AppearanceItem, Effect, ImageBlob, ImageObject, Node, NodeId, NodeKind};
+use vectorcraft_doc::{AppearanceItem, Document, Effect, ImageBlob, ImageObject, Node, NodeId, NodeKind};
 use vectorcraft_geom::{Affine, PathData};
-use vectorcraft_three_d::{Facet, Material, TraceFace, TraceQuality};
+use vectorcraft_three_d::{Decal, Facet, Material, TraceFace, TraceQuality};
 
 use super::{EXTRUDE, INFLATE, Profile, RENDER, ROTATE};
 
@@ -52,10 +52,11 @@ fn opacity_of(item: &AppearanceItem, member: f32) -> f64 {
 /// Each solid of `fx` on `shapes` with the paint color and opacity it is traced in. Extrude & Bevel
 /// keeps the faces turned away from the viewer, so they can cast shadows. `None` when a solid can't
 /// be built (the canvas then draws the source art, as for the vector faces).
-/// One solid's facets, the color of its paint (0..1 RGB) and its opacity.
-type TracedSolid = (Vec<Facet>, [f64; 3], f64);
+/// One solid's facets, the color of its paint (0..1 RGB), its opacity, and whether it is a fill's.
+type TracedSolid = (Vec<Facet>, [f64; 3], f64, bool);
 
-fn solids(fx: &Effect, p: &Value, shapes: &[Profile]) -> Option<Vec<TracedSolid>> {
+/// Each solid of `fx` on `shapes` ([`TracedSolid`]), and the bounds they are built about.
+fn solids(fx: &Effect, p: &Value, shapes: &[Profile]) -> Option<(Vec<TracedSolid>, vectorcraft_geom::Rect)> {
     let b = super::union_bounds(shapes)?;
     let view = super::view_options(p);
     let mut out = vec![];
@@ -70,7 +71,7 @@ fn solids(fx: &Effect, p: &Value, shapes: &[Profile]) -> Option<Vec<TracedSolid>
             AppearanceItem::Stroke(s) => &s.paint,
         };
         if let Some(color) = color_of(paint) {
-            out.push((f, color, opacity_of(item, member)));
+            out.push((f, color, opacity_of(item, member), matches!(item, AppearanceItem::Fill(_))));
         }
         Some(())
     };
@@ -82,7 +83,7 @@ fn solids(fx: &Effect, p: &Value, shapes: &[Profile]) -> Option<Vec<TracedSolid>
                 keep(f, item, s.opacity, &mut out)?;
             }
         }
-        return Some(out);
+        return Some((out, b));
     }
     let (parts, bounds) = super::solid_parts(shapes, b);
     if fx.id == EXTRUDE {
@@ -95,32 +96,122 @@ fn solids(fx: &Effect, p: &Value, shapes: &[Profile]) -> Option<Vec<TracedSolid>
                 Err(_) => return None,
             }
         }
-        return Some(out);
+        return Some((out, bounds));
     }
     for ((item, opacity, ..), f) in parts.iter().zip(super::built_solids(&fx.id, p, &parts, bounds, super::MAX_OBJECT_FACES)) {
         if let Some(f) = f.ok()? {
             keep(f, item, *opacity, &mut out)?;
         }
     }
-    Some(out)
+    Some((out, bounds))
+}
+
+/// The filled areas of art `node` (a graphic's art as drawn on a face, unlit), as decals in
+/// drawing order: each path's top fill in its solid color, or a gradient's middle color, at the
+/// fill's opacity times the opacities of the groups it is in. Patterns are left out.
+fn decals_of(node: &Node, opacity: f64, out: &mut Vec<Decal>) {
+    let opacity = opacity * f64::from(node.opacity);
+    match &node.kind {
+        NodeKind::Path { rule, .. } => {
+            let Some(path) = node.path_data() else { return };
+            for item in &node.appearance.items {
+                if let AppearanceItem::Fill(f) = item
+                    && let Some(color) = color_of(&f.paint)
+                    && let Some(d) =
+                        Decal::new(path.to_bezpath(), *rule == vectorcraft_geom::FillRule::EvenOdd, color, opacity * f64::from(f.opacity))
+                {
+                    out.push(d);
+                }
+            }
+        }
+        NodeKind::Group { children, clip } => {
+            // A clip group's first child is its clip path: the decal is limited to its facet anyway.
+            for child in children.iter().skip(usize::from(*clip)) {
+                decals_of(child, opacity, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `facets` unlit: every facet in full light with no light ramp, so the graphics drawn on them keep
+/// their own colors, which the tracer then lights.
+fn unlit(facets: &[Facet]) -> Vec<Facet> {
+    facets
+        .iter()
+        .cloned()
+        .map(|mut f| {
+            f.illumination = [1.0; 3];
+            f.brightness = 1.0;
+            f.rgb_gradient = None;
+            f
+        })
+        .collect()
+}
+
+/// For each of `facets` (a solid's, about `bounds`), the decals of the graphics of effect `id` with
+/// parameters `p` drawn on it: the caps' graphics on each cap the viewer sees, and those on Extrude &
+/// Bevel's sides or Inflate's front on each facet they fall on ([`super::graphics::facet_parts`]).
+fn facet_decals(
+    doc: Option<&Document>,
+    id: NodeId,
+    (effect, p): (&str, &Value),
+    bounds: vectorcraft_geom::Rect,
+    facets: &[Facet],
+) -> Vec<Vec<Decal>> {
+    let mut out: Vec<Vec<Decal>> = vec![vec![]; facets.len()];
+    let list = super::mapped_graphics(p);
+    if doc.is_none() || list.is_empty() {
+        return out;
+    }
+    let flat = unlit(facets);
+    let caps: Vec<&Facet> = super::seen_ends(&flat).collect();
+    let mut elements = 0usize;
+    for (face, art) in super::graphic_art(doc, id, (effect, p), bounds, &caps, 1.0, &mut elements) {
+        let mut decals = vec![];
+        decals_of(&art, 1.0, &mut decals);
+        for (slot, f) in out.iter_mut().zip(facets) {
+            if f.end == Some(face) && !f.away {
+                slot.extend(decals.iter().cloned());
+            }
+        }
+    }
+    if (effect == EXTRUDE || effect == INFLATE)
+        && let Some(parts) = super::graphics::facet_parts(doc, id, &list, &flat, effect == EXTRUDE)
+    {
+        for (slot, parts) in out.iter_mut().zip(parts) {
+            for part in parts {
+                decals_of(&part, 1.0, slot);
+            }
+        }
+    }
+    out
 }
 
 /// The traced art of `fx` on `shapes` for object `id`: one image of every solid, lit by the effect's
 /// lights and materials ([`super::material`]), with shadows the solids cast on themselves and each
 /// other. `None` when `fx` is not ray traced, or when there is nothing to trace or it is past
 /// [`vectorcraft_three_d::MAX_TRACE_FACES`]: the vector faces are drawn instead.
-pub(crate) fn traced_surfaces(id: NodeId, fx: &Effect, shapes: &[Profile]) -> Option<Vec<Arc<Node>>> {
+pub(crate) fn traced_surfaces(doc: Option<&Document>, id: NodeId, fx: &Effect, shapes: &[Profile]) -> Option<Vec<Arc<Node>>> {
     let p = crate::merged_params(&fx.id, &fx.params);
     let quality = ray_traced(&fx.id, &p)?;
-    let built = solids(fx, &p, shapes)?;
+    let (built, bounds) = solids(fx, &p, shapes)?;
     let materials = super::material::materials(&fx.id, &p);
     let view = super::view_options(&p);
+    // The graphics go on the first fill's solid ([`facet_decals`]).
+    let first_fill = built.iter().position(|s| s.3);
+    let decals: Vec<Vec<Vec<Decal>>> = built
+        .iter()
+        .enumerate()
+        .map(|(k, (facets, ..))| if Some(k) == first_fill { facet_decals(doc, id, (&fx.id, &p), bounds, facets) } else { vec![vec![]; facets.len()] })
+        .collect();
     let faces: Vec<TraceFace> = built
         .iter()
-        .flat_map(|(facets, color, alpha)| {
-            facets.iter().map(move |facet| {
+        .zip(&decals)
+        .flat_map(|((facets, color, alpha, _), decals)| {
+            facets.iter().zip(decals).map(move |(facet, decals)| {
                 let material = materials.as_ref().and_then(|m| m.of(facet));
-                TraceFace { facet, color: *color, alpha: *alpha, material: material.unwrap_or(DIFFUSE), smooth: material.is_none() }
+                TraceFace { facet, color: *color, alpha: *alpha, material: material.unwrap_or(DIFFUSE), smooth: material.is_none(), decals }
             })
         })
         .collect();
@@ -169,16 +260,54 @@ pub(crate) struct RevolveSurface<'a> {
     pub options: vectorcraft_three_d::Revolve,
     pub item: &'a AppearanceItem,
     pub member: f32,
+    /// The effect's graphics go on this surface's side.
+    pub graphics: bool,
+}
+
+/// For each of Revolve's `faces`, the decals of the graphics in `p` drawn on it, unlit
+/// ([`super::graphics::surface_parts`]). None past the graphics' limits.
+fn revolve_decals(doc: Option<&Document>, id: NodeId, p: &Value, faces: &[vectorcraft_three_d::Face]) -> Vec<Vec<Decal>> {
+    let mut out: Vec<Vec<Decal>> = vec![vec![]; faces.len()];
+    let list = super::mapped_graphics(p);
+    if doc.is_none() || list.is_empty() {
+        return out;
+    }
+    let flat: Vec<vectorcraft_three_d::Face> = faces
+        .iter()
+        .cloned()
+        .map(|mut f| {
+            f.illumination = [1.0; 3];
+            f.brightness = 1.0;
+            (f.gradient, f.light_gradient, f.rgb_gradient) = (None, None, None);
+            f
+        })
+        .collect();
+    let mut copies = 0usize;
+    if let Some(parts) = super::graphics::surface_parts(doc, id, &list, &flat, &|_, c| Paint::solid(c), &mut copies, false) {
+        for (slot, parts) in out.iter_mut().zip(parts) {
+            for part in parts {
+                decals_of(&part, 1.0, slot);
+            }
+        }
+    }
+    out
 }
 
 /// The ray-traced art of Revolve `fx` for object `id`: one image of the surfaces swept about the
 /// bounds `b`, lit by the effect's lights with each face's smooth light, with the shadows the
 /// surfaces cast on themselves and each other. `None` when `fx` is not ray traced, when a surface
 /// can't be swept, or when there is nothing to trace or too much: the vector faces are drawn then.
-pub(crate) fn revolve_traced(id: NodeId, fx: &Effect, surfaces: &[RevolveSurface], b: vectorcraft_geom::Rect) -> Option<Arc<Node>> {
+pub(crate) fn revolve_traced(
+    doc: Option<&Document>,
+    id: NodeId,
+    fx: &Effect,
+    surfaces: &[RevolveSurface],
+    b: vectorcraft_geom::Rect,
+) -> Option<Arc<Node>> {
     let p = crate::merged_params(&fx.id, &fx.params);
     let quality = ray_traced(&fx.id, &p)?;
     let mut solids: Vec<TracedSolid> = vec![];
+    let mut decals: Vec<Vec<Vec<Decal>>> = vec![];
     let mut total = 0usize;
     for s in surfaces {
         let paint = match s.item {
@@ -186,11 +315,13 @@ pub(crate) fn revolve_traced(id: NodeId, fx: &Effect, surfaces: &[RevolveSurface
             AppearanceItem::Stroke(st) => &st.paint,
         };
         let Some(color) = color_of(paint) else { continue };
-        let faces = vectorcraft_three_d::revolve(s.path, b, s.options).ok()?;
+        let options = vectorcraft_three_d::Revolve { map_surface: s.graphics, ..s.options };
+        let faces = vectorcraft_three_d::revolve(s.path, b, options).ok()?;
         total = total.saturating_add(faces.len());
         if total > vectorcraft_three_d::MAX_TRACE_FACES {
             return None;
         }
+        decals.push(if s.graphics { revolve_decals(doc, id, &p, &faces) } else { vec![vec![]; faces.len()] });
         let facets = faces
             .into_iter()
             .map(|face| {
@@ -200,13 +331,21 @@ pub(crate) fn revolve_traced(id: NodeId, fx: &Effect, surfaces: &[RevolveSurface
                 facet
             })
             .collect();
-        solids.push((facets, color, opacity_of(s.item, s.member)));
+        solids.push((facets, color, opacity_of(s.item, s.member), true));
     }
     let view = super::view_options(&p);
     let faces: Vec<TraceFace> = solids
         .iter()
-        .flat_map(|(facets, color, alpha)| {
-            facets.iter().map(move |facet| TraceFace { facet, color: *color, alpha: *alpha, material: DIFFUSE, smooth: true })
+        .zip(&decals)
+        .flat_map(|((facets, color, alpha, _), decals)| {
+            facets.iter().zip(decals).map(move |(facet, decals)| TraceFace {
+                facet,
+                color: *color,
+                alpha: *alpha,
+                material: DIFFUSE,
+                smooth: true,
+                decals,
+            })
         })
         .collect();
     traced_image(id, &faces, &view, quality)
@@ -216,7 +355,7 @@ pub(crate) fn revolve_traced(id: NodeId, fx: &Effect, surfaces: &[RevolveSurface
 mod tests {
     use serde_json::json;
     use vectorcraft_doc::color::Color;
-    use vectorcraft_doc::{Appearance, Node, NodeId};
+    use vectorcraft_doc::{Appearance, Document, Node, NodeId};
     use vectorcraft_geom::{BezPath, PathData};
 
     use super::*;
@@ -318,5 +457,81 @@ mod tests {
         g.appearance.effects.push(crate::new_effect(crate::REVOLVE, &json!({"render": {"rayTracing": true, "quality": "low"}})).unwrap());
         let art = crate::revolve_art(&g).unwrap();
         assert_eq!(images(&art).len(), 1);
+    }
+
+    /// A document with symbol "Mark": a red 10 × 10 square.
+    fn marked() -> Document {
+        let mut d = Document::new(1000.0, 1000.0);
+        let art = Node::path(
+            NodeId(0),
+            vectorcraft_geom::shapes::rectangle(vectorcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0)),
+            Appearance::basic(Paint::solid(Color::rgb(1.0, 0.0, 0.0)), Paint::None, 0.0),
+        );
+        d.symbols.push(vectorcraft_doc::Symbol { dynamic: false, name: "Mark".into(), art: Arc::new(art) });
+        d
+    }
+
+    /// The color of the traced image in `art` at page point `p`.
+    fn traced_at(art: &Node, p: vectorcraft_geom::Point) -> [u8; 4] {
+        let im = images(art).into_iter().next().expect("a traced image");
+        let blob = im.pixels.expect("its pixels");
+        let img = image::load_from_memory(&blob.bytes).expect("a PNG").to_rgba8();
+        let q = im.xf.inverse() * p;
+        img.get_pixel(q.x as u32, q.y as u32).0
+    }
+
+    #[test]
+    fn graphics_are_painted_into_the_traced_image_on_their_faces() {
+        let d = marked();
+        let straight =
+            json!({"rotationX": 0.0, "rotationY": 0.0, "rotationZ": 0.0, "shade": false, "render": {"rayTracing": true, "quality": "low"}});
+        let centre = vectorcraft_geom::Point::new(150.0, 150.0);
+        let corner = vectorcraft_geom::Point::new(105.0, 105.0);
+        for id in [EXTRUDE, INFLATE, ROTATE] {
+            let mut p = straight.clone();
+            p["graphics"] = json!([{"symbol": "Mark", "scale": 300.0}]);
+            let art = super::super::solid_art_in(Some(&d), &square(p, id)).unwrap();
+            assert_eq!(traced_at(&art, centre), [255, 0, 0, 255], "{id}: the graphic's red at its center");
+            let paint = traced_at(&art, corner);
+            assert!(paint[0] > 150 && paint[1] > 30, "{id}: the object's own paint away from it: {paint:?}");
+            // Without the document's symbol nothing is painted.
+            let art = super::super::solid_art_in(None, &square(straight.clone(), id)).unwrap();
+            assert_ne!(traced_at(&art, centre), [255, 0, 0, 255], "{id}");
+        }
+        // A graphic on Extrude & Bevel's sides is painted on the wall it names.
+        let mut p = straight.clone();
+        p["rotationY"] = json!(-40.0);
+        p["graphics"] = json!([{"symbol": "Mark", "face": "side", "x": 150.0, "scale": 200.0}]);
+        let side = super::super::solid_art_in(Some(&d), &square(p.clone(), EXTRUDE)).unwrap();
+        p["rotationY"] = json!(40.0);
+        let other = super::super::solid_art_in(Some(&d), &square(p, EXTRUDE)).unwrap();
+        let reds = |art: &Node| {
+            let im = images(art).into_iter().next().unwrap();
+            let img = image::load_from_memory(&im.pixels.unwrap().bytes).unwrap().to_rgba8();
+            img.pixels().filter(|px| px.0 == [255, 0, 0, 255]).count()
+        };
+        assert_eq!([reds(&side) > 20, reds(&other) > 20].iter().filter(|r| **r).count(), 1, "seen on the right wall from one side only");
+    }
+
+    #[test]
+    fn graphics_on_revolve_are_painted_into_its_traced_image() {
+        let mut b = BezPath::new();
+        b.move_to((100.0, 100.0));
+        b.line_to((160.0, 100.0));
+        b.line_to((160.0, 200.0));
+        b.line_to((100.0, 200.0));
+        b.close_path();
+        let gray = Paint::solid(Color::rgb(0.5, 0.5, 0.5));
+        let mut n = Node::path(NodeId(1), PathData::from_bezpath(&b), Appearance::basic(gray, Paint::None, 0.0));
+        let p = json!({"shade": false, "graphics": [{"symbol": "Mark", "scale": 300.0}], "render": {"rayTracing": true, "quality": "low"}});
+        n.appearance.effects.push(crate::new_effect(crate::REVOLVE, &p).unwrap());
+        let reds = |art: &Node| {
+            let im = images(art).into_iter().next().unwrap();
+            let img = image::load_from_memory(&im.pixels.unwrap().bytes).unwrap().to_rgba8();
+            img.pixels().filter(|px| px.0[0] > 200 && px.0[1] < 40).count()
+        };
+        let d = marked();
+        assert!(reds(&crate::revolve_art_in(Some(&d), &n).unwrap()) > 100, "the label on the side");
+        assert_eq!(reds(&crate::revolve_art_in(None, &n).unwrap()), 0);
     }
 }

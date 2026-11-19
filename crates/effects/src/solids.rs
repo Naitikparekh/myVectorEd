@@ -1554,7 +1554,7 @@ fn art_for(doc: Option<&Document>, n: &Node, fx: &Effect, shapes: &[Profile]) ->
     // Ray traced, the effect draws one traced image of its solids over the shadow it casts; when
     // there is nothing to trace (or too much) it draws its vector faces.
     if traced::ray_traced(&fx.id, &p).is_some()
-        && let Some(art) = traced::traced_surfaces(n.id, fx, shapes)
+        && let Some(art) = traced::traced_surfaces(doc, n.id, fx, shapes)
     {
         let shadow = cast_shadow(&fx.id, &p, shapes).ok()?;
         let shadow = shadow.map_or_else(Vec::new, |(caster, settings, cast)| shadow::scoped_art(n.id, &caster, settings, cast, has_masks(shapes)));
