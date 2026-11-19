@@ -26,6 +26,9 @@ use vectorcraft_three_d::{FaceMap, Facet, PlanarFace};
 /// The effect parameter that holds the graphics.
 pub const GRAPHICS: &str = "graphics";
 
+/// The `face` of a graphic on Extrude & Bevel's sides ([`MappedGraphic::side`]).
+pub const SIDE: &str = "side";
+
 /// The most graphics one 3D effect maps.
 pub const MAX_GRAPHICS: usize = 64;
 
@@ -90,11 +93,16 @@ pub struct MappedGraphic {
     pub scale: f64,
     /// Degrees, counterclockwise.
     pub rotation: f64,
+    /// The graphic lies on Extrude & Bevel's sides, unrolled flat ([`vectorcraft_three_d::Facet::surface`]),
+    /// rather than on a cap: `face` is then [`PlanarFace::Front`] and `x` and `y` are its center's
+    /// offset on the unrolled sides. Written as the face `side`.
+    pub side: bool,
 }
 
 impl MappedGraphic {
     pub fn to_value(&self) -> Value {
-        json!({"symbol": self.symbol, "face": self.face.id(), "x": self.x, "y": self.y, "scale": self.scale, "rotation": self.rotation})
+        let face = if self.side { SIDE } else { self.face.id() };
+        json!({"symbol": self.symbol, "face": face, "x": self.x, "y": self.y, "scale": self.scale, "rotation": self.rotation})
     }
 
     /// The graphic `v` describes. Only `symbol` is required: `face` defaults to front, the offsets
@@ -108,9 +116,10 @@ impl MappedGraphic {
             Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
             _ => return Err(format!("each of `{GRAPHICS}` needs `symbol`, the name of a symbol")),
         };
-        let face = match m.get("face") {
-            None => PlanarFace::Front,
-            Some(v) => v.as_str().and_then(PlanarFace::parse).ok_or_else(|| format!("`{GRAPHICS}` face must be front or back"))?,
+        let (face, side) = match m.get("face") {
+            None => (PlanarFace::Front, false),
+            Some(v) if v.as_str() == Some(SIDE) => (PlanarFace::Front, true),
+            Some(v) => (v.as_str().and_then(PlanarFace::parse).ok_or_else(|| format!("`{GRAPHICS}` face must be front, back or side"))?, false),
         };
         let number = |key: &str, default: f64, (lo, hi): (f64, f64)| -> Result<f64, String> {
             match m.get(key) {
@@ -124,6 +133,7 @@ impl MappedGraphic {
         Ok(Self {
             symbol,
             face,
+            side,
             x: number("x", 0.0, (-MAX_OFFSET, MAX_OFFSET))?,
             y: number("y", 0.0, (-MAX_OFFSET, MAX_OFFSET))?,
             scale: number("scale", 100.0, SCALE_RANGE)?,
@@ -188,6 +198,9 @@ pub fn validate(id: &str, p: &Value) -> Result<(), String> {
         }
         if id == crate::REVOLVE && g.face == PlanarFace::Back {
             return Err("Revolve maps graphics onto its side: map them onto the front".into());
+        }
+        if g.side && id != super::EXTRUDE {
+            return Err("Only Extrude & Bevel maps graphics onto its sides".into());
         }
     }
     Ok(())
@@ -428,7 +441,7 @@ pub(super) fn face_art(
     let light = caps.first()?.illumination;
     let affine = map.local_affine(center).filter(|_| map.is_affine());
     let mut children = vec![];
-    for g in graphics.iter().filter(|g| g.face == face) {
+    for g in graphics.iter().filter(|g| g.face == face && !g.side) {
         let Some(symbol) = doc.symbols.iter().find(|s| s.name == g.symbol) else { continue };
         // A symbol past the limits is left out; the other graphics still draw.
         let Ok(pieces) = pieces_of(doc, symbol) else { continue };
@@ -537,10 +550,12 @@ struct Unrolled {
 /// surface, cut into straight pieces. A graphic whose symbol `doc` does not have, or whose art is
 /// past the limits of [`pieces_of`], is left out. `None` when the pieces take more than
 /// [`MAX_ELEMENTS`] points together.
-fn unrolled(doc: &Document, graphics: &[MappedGraphic]) -> Option<Vec<Unrolled>> {
+///
+/// With `side` the graphics are those on Extrude & Bevel's sides instead.
+fn unrolled(doc: &Document, graphics: &[MappedGraphic], side: bool) -> Option<Vec<Unrolled>> {
     let mut pieces = vec![];
     let mut points = 0usize;
-    for g in graphics.iter().filter(|g| g.face == PlanarFace::Front) {
+    for g in graphics.iter().filter(|g| g.face == PlanarFace::Front && g.side == side) {
         let Some(symbol) = doc.symbols.iter().find(|s| s.name == g.symbol) else { continue };
         let Ok(art) = pieces_of(doc, symbol) else { continue };
         let Some(bounds) = art.iter().filter_map(|p| p.path.bounds()).reduce(|a, b| a.union(b)) else { continue };
@@ -619,9 +634,9 @@ fn straight_pieces(path: &BezPath, points: &mut usize) -> Option<Vec<Vec<Point>>
 
 /// Do the graphics in Revolve parameters `p` fit the limits with the symbols of `doc`? Their art,
 /// cut into straight pieces on the side surface, may take up to [`MAX_ELEMENTS`] points together.
-pub(crate) fn validate_surface_symbols(doc: &Document, p: &Value) -> Result<(), String> {
+pub(crate) fn validate_surface_symbols(doc: &Document, p: &Value, side: bool) -> Result<(), String> {
     let list = mapped_graphics(p);
-    if list.is_empty() || unrolled(doc, &list).is_some() {
+    if list.is_empty() || unrolled(doc, &list, side).is_some() {
         return Ok(());
     }
     Err("The graphics are too complex: simplify the symbols' art".into())
@@ -645,10 +660,11 @@ pub(crate) fn surface_parts(
     faces: &[vectorcraft_three_d::Face],
     shade: &dyn Fn(&vectorcraft_three_d::Face, vectorcraft_doc::color::Color) -> Paint,
     copies: &mut usize,
+    side: bool,
 ) -> Option<Vec<Vec<Arc<Node>>>> {
     let mut out: Vec<Vec<Arc<Node>>> = vec![vec![]; faces.len()];
     let Some(doc) = doc else { return Some(out) };
-    let pieces = unrolled(doc, graphics)?;
+    let pieces = unrolled(doc, graphics, side)?;
     let Some(all) = pieces.iter().map(|p| p.bounds).reduce(|a, b| a.union(b)) else { return Some(out) };
     // Each piece listed in the buckets of the surface's x its bounds reach across.
     let width = (all.width() / SURFACE_BUCKETS as f64).max(1e-9);
@@ -964,6 +980,9 @@ impl GraphicFrame {
     /// Where graphic `g`'s center lands on the page, and whether its face is turned toward the
     /// viewer. `None` when the object has no such face or the point has no page point.
     pub fn handle(&self, g: &MappedGraphic) -> Option<(Point, bool)> {
+        if g.side {
+            return None;
+        }
         let map = self.map(g.face)?;
         Some((map.to_page(self.art_point(g.face, (g.x, g.y)))?, map.visible))
     }
@@ -1070,3 +1089,38 @@ pub fn with_graphic(p: &Value, g: &MappedGraphic) -> Value {
 #[cfg(test)]
 #[path = "tests_graphics.rs"]
 mod tests;
+
+/// The face of Revolve's that stands for facet `f` of Extrude & Bevel's sides, for
+/// [`surface_parts`]: its outline, light and place on the unrolled sides.
+fn as_face(f: &Facet) -> vectorcraft_three_d::Face {
+    vectorcraft_three_d::Face {
+        points: f.contours.first().cloned().unwrap_or_default(),
+        depth: f.depth,
+        normal: f.normal,
+        brightness: f.brightness,
+        gradient: None,
+        illumination: f.illumination,
+        light_gradient: None,
+        rgb_gradient: f.rgb_gradient,
+        outline: f.outline.clone(),
+        cap: false,
+        visibility_pieces: None,
+        surface: f.surface.clone(),
+        plane: f.plane,
+    }
+}
+
+/// The parts of the graphics on Extrude & Bevel's sides (`side` graphics) that fall on each of
+/// `facets`, for an object with id `id`: for each facet, the nodes to draw right after it. Only
+/// walls and bevels of the longest outline turned toward the viewer carry a part
+/// ([`vectorcraft_three_d::Facet::surface`]); each part is cut to its facet and shaded with its
+/// light. `None` past the limits of [`surface_parts`]: the solid then draws without them.
+pub(crate) fn side_parts(doc: Option<&Document>, id: NodeId, graphics: &[MappedGraphic], facets: &[Facet]) -> Option<Vec<Vec<Arc<Node>>>> {
+    if !graphics.iter().any(|g| g.side) || !facets.iter().any(|f| f.surface.is_some()) {
+        return None;
+    }
+    let faces: Vec<vectorcraft_three_d::Face> = facets.iter().map(as_face).collect();
+    let shade = |face: &vectorcraft_three_d::Face, c: vectorcraft_doc::color::Color| Paint::solid(crate::lighting::shade(c, face.illumination));
+    let mut copies = 0usize;
+    surface_parts(doc, id, graphics, &faces, &shade, &mut copies, true)
+}

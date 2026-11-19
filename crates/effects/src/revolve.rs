@@ -168,7 +168,7 @@ pub(crate) fn validate_in(doc: Option<&Document>, n: &Node, id: &str, p: &Value)
                 // With no member to carry them, the graphics' art must still fit its limits.
                 None => {
                     crate::solids::graphics::validate_symbols(doc, p)?;
-                    crate::solids::graphics::validate_surface_symbols(doc, p)?;
+                    crate::solids::graphics::validate_surface_symbols(doc, p, false)?;
                 }
             }
         }
@@ -201,10 +201,10 @@ fn check_graphics(doc: Option<&Document>, id: &str, path: &PathData, b: Rect, op
     let graphics = crate::solids::mapped_graphics(p);
     let Some(doc) = doc.filter(|_| id == REVOLVE && !graphics.is_empty()) else { return Ok(()) };
     crate::solids::graphics::validate_symbols(doc, p)?;
-    crate::solids::graphics::validate_surface_symbols(doc, p)?;
+    crate::solids::graphics::validate_surface_symbols(doc, p, false)?;
     let faces = vectorcraft_three_d::revolve(path, b, options)?;
     let mut used = *copies;
-    match crate::solids::graphics::surface_parts(Some(doc), NodeId(0), &graphics, &faces, &|_, c| Paint::solid(c), &mut used) {
+    match crate::solids::graphics::surface_parts(Some(doc), NodeId(0), &graphics, &faces, &|_, c| Paint::solid(c), &mut used, false) {
         Some(_) => {
             *copies = used;
             Ok(())
@@ -523,7 +523,7 @@ fn surface(
     let mut parts = if graphics.is_empty() {
         vec![]
     } else {
-        match crate::solids::graphics::surface_parts(doc, n.id, &graphics, &faces, &shade, &mut used) {
+        match crate::solids::graphics::surface_parts(doc, n.id, &graphics, &faces, &shade, &mut used, false) {
             Some(parts) => {
                 copies.graphics = used;
                 parts
