@@ -13121,3 +13121,29 @@ fn a_stack_of_two_gradient_fills_is_written_live() {
     assert!(!p.contains("(Anon 1) XW"), "{p}");
     assert!(!matches!(n.kind, NodeKind::Path { .. }), "{n:?}");
 }
+
+/// Point type with two fills of its own (the top one at 50% in Multiply) and a drop shadow, as
+/// comic lettering is made in the Appearance panel, is written as a text object with an art style:
+/// it reads back as type, its text and appearance live, instead of as outlines with a warning.
+#[test]
+fn type_with_an_appearance_of_its_own_is_written_as_styled_type() {
+    use vectorcraft_doc::{CharStyle, TextObject};
+    let ap = || {
+        let mut top = FillLayer::new(solid(Color::rgb(0.9, 0.1, 0.1)));
+        (top.opacity, top.blend) = (0.5, BlendMode::Multiply);
+        Appearance {
+            items: vec![AppearanceItem::Fill(FillLayer::new(solid(Color::WHITE))), AppearanceItem::Fill(top)],
+            effects: vec![drop_shadow()],
+            contents_index: None,
+        }
+    };
+    let (n, warnings, p) = read_one(|doc| {
+        let t = TextObject::point((20.0, 60.0).into(), "Bang", CharStyle { size: 24.0, ..CharStyle::default() });
+        Node { appearance: ap().into(), ..Node::new(doc.alloc_id(), NodeKind::Text(Box::new(t))) }
+    });
+    assert!(p.contains("(Anon 1) XW"), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w == writer::TYPE), "{warnings:?}");
+    let NodeKind::Text(t) = &n.kind else { panic!("{n:#?}") };
+    assert_eq!(t.plain_text(), "Bang");
+    assert!(writer::same_appearance(&n.appearance, &ap()), "{:#?}", n.appearance);
+}

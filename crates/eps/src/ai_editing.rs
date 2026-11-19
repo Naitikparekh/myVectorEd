@@ -130,6 +130,8 @@
 //!   (`%AI9_BeginArtStyles`, each `/KnownStyle :` with its name and a filter tree: a chain of the
 //!   stack of fills and strokes with the contents among them, the effects and the blend filter), the
 //!   Graphic Styles panel's first; the panel's order follows the palette (`%AI9_BeginArtStyleList`).
+//!   Type with fills, strokes or effects of its own in solid colours (no Warp, Distort & Transform
+//!   or Blur) is written the same way: its look as outlines, then its text object on `%_` lines.
 //!   A path or compound path with several fills or strokes in solid colours (fills may be gradients,
 //!   each a different one) is written the same way,
 //!   with a style of its stack, whether or not it has live effects.
@@ -157,7 +159,7 @@
 //! `%AI3_TemplateBox` holds the canvas's center in art space. What the form above can't hold is written as plain filled and stroked paths, each such
 //! loss a warning: type the text document can't hold (in opacity masks, pattern tiles, symbols and
 //! art cut to a clipping object, mirrored, turned or unevenly scaled area type and type on a path, inline graphics, ruby,
-//! gradient or pattern paint, an appearance of its own) as its outlines and its inline graphics'
+//! gradient or pattern paint, an appearance of its own its art style can't hold) as its outlines and its inline graphics'
 //! art, the character and paragraph attributes the text document doesn't hold, freeform gradients, gradients
 //! along or across a stroke and gradients without stops, with more than 256 stops or without extent
 //! as their average color
