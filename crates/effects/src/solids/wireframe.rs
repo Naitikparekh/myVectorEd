@@ -54,11 +54,20 @@ pub(crate) fn wireframe_params(id: &str, p: &Value) -> bool {
 /// missing `mode` is `shaded`). The 3D (Classic) effects refuse it as a parameter they do not take.
 pub(crate) fn validate_render(id: &str, p: &Value) -> Result<(), String> {
     let Some(render) = p.get(RENDER).filter(|_| TAKES_RENDER.contains(&id)) else { return Ok(()) };
-    let valid = render
-        .as_object()
-        .is_some_and(|fields| fields.iter().all(|(key, value)| key == "mode" && value.as_str().is_some_and(|m| RENDER_MODES.contains(&m))));
+    let valid = render.as_object().is_some_and(|fields| {
+        fields.iter().all(|(key, value)| match key.as_str() {
+            "mode" => value.as_str().is_some_and(|m| RENDER_MODES.contains(&m)),
+            // Ray Tracing and its Quality ([`super::traced`]); Revolve takes them and ignores them.
+            "rayTracing" => value.is_boolean(),
+            "quality" => value.as_str().and_then(vectorcraft_three_d::TraceQuality::parse).is_some(),
+            _ => false,
+        })
+    });
     if !valid {
-        return Err("`render` must be an object holding only `mode`, set to shaded or wireframe".into());
+        return Err(
+            "`render` must be an object holding `mode` (shaded or wireframe), `rayTracing` (true or false) and `quality` (low, medium or high)"
+                .into(),
+        );
     }
     Ok(())
 }
